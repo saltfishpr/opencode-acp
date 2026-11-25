@@ -1,0 +1,392 @@
+import type {
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3FinishReason,
+  LanguageModelV3GenerateResult,
+  LanguageModelV3Prompt,
+  LanguageModelV3StreamPart,
+  LanguageModelV3Usage,
+} from "@ai-sdk/provider"
+import type { PromptResponse, SessionUpdate, StopReason } from "@agentclientprotocol/sdk"
+import type { AcpClient } from "../acp/client.js"
+import { explain } from "../acp/errors.js"
+import type { AgentRuntime } from "../acp/runtime.js"
+import { EMPTY_USAGE, noteUsageUpdate, usageOf, type TurnUsage } from "../acp/usage.js"
+import { logWarn } from "../log.js"
+import type { SessionBindings } from "../session/binding.js"
+import type { SessionTitles } from "../session/title.js"
+import { ToolProjector } from "./projection.js"
+
+/** Dependencies an ACP language model needs to run a turn. */
+export interface AcpModelDeps {
+  readonly runtime: AgentRuntime
+  readonly bindings: SessionBindings
+  /** Working directory of an OpenCode session. */
+  readonly directory: (sessionID: string) => Promise<string>
+  /** ACP titles reported for each OpenCode session. */
+  readonly titles: SessionTitles
+  /** Called when a new ACP title arrives, so a title hook that already ran can be corrected. */
+  readonly onTitle?: (sessionID: string, title: string) => void
+  /** Called when a turn reports a context window the model catalog did not know. */
+  readonly onContextWindow?: (size: number) => void
+}
+
+/**
+ * A LanguageModelV3 that forwards each OpenCode turn to one ACP session.
+ *
+ * `doStream` emits text and reasoning parts and ends with a `finish` part; tool
+ * calls and approvals are projected in later milestones. Requests for the same
+ * OpenCode session are serialized, and aborting the call sends
+ * `session/cancel` to the agent.
+ */
+export function acpLanguageModel(modelID: string, deps: AcpModelDeps): LanguageModelV3 {
+  return {
+    specificationVersion: "v3",
+    provider: "acp",
+    modelId: modelID,
+    supportedUrls: {},
+    async doGenerate(options): Promise<LanguageModelV3GenerateResult> {
+      const parts: LanguageModelV3StreamPart[] = []
+      for await (const part of run(options, deps, modelID)) parts.push(part)
+
+      const text = parts.flatMap((part) => (part.type === "text-delta" ? [part.delta] : []))
+      const reasoning = parts.flatMap((part) => (part.type === "reasoning-delta" ? [part.delta] : []))
+      const finish = parts.findLast((part) => part.type === "finish")
+
+      return {
+        content: [
+          ...(text.length > 0 ? [{ type: "text" as const, text: text.join("") }] : []),
+          ...(reasoning.length > 0 ? [{ type: "reasoning" as const, text: reasoning.join("") }] : []),
+        ],
+        finishReason: finish?.finishReason ?? OTHER,
+        usage: finish?.usage ?? EMPTY_USAGE,
+        warnings: [],
+      }
+    },
+    async doStream(options) {
+      return { stream: toStream(run(options, deps, modelID)) }
+    },
+  }
+}
+
+const OTHER: LanguageModelV3FinishReason = { unified: "other", raw: "other" }
+
+/**
+ * Streams one ACP turn.
+ *
+ * Only the latest user message is forwarded: the ACP session keeps the remote
+ * agent's own conversation, and OpenCode's system instructions, history and
+ * tool records are not meant for it.
+ */
+async function* run(
+  options: LanguageModelV3CallOptions,
+  deps: AcpModelDeps,
+  modelID: string,
+): AsyncGenerator<LanguageModelV3StreamPart> {
+  const sessionID = sessionIDOf(options)
+  const prompt = lastUserText(options.prompt)
+
+  yield { type: "stream-start", warnings: [] }
+  yield { type: "response-metadata", modelId: modelID }
+
+  if (sessionID === undefined) {
+    yield* say("无法确定 OpenCode 会话 ID，ACP 请求未发送。")
+    yield finish(OTHER, EMPTY_USAGE)
+    return
+  }
+
+  if (prompt.length === 0) {
+    yield* say("这条消息没有可发送的文本内容。")
+    yield finish(OTHER, EMPTY_USAGE)
+    return
+  }
+
+  const release = await deps.runtime.lock(sessionID)
+  try {
+    yield* turn(sessionID, prompt, options, deps)
+  } finally {
+    release()
+  }
+}
+
+async function* turn(
+  sessionID: string,
+  text: string,
+  options: LanguageModelV3CallOptions,
+  deps: AcpModelDeps,
+): AsyncGenerator<LanguageModelV3StreamPart> {
+  let warning: string | undefined
+  let client: AcpClient
+  let acpSessionID: string
+  let cwd: string
+
+  try {
+    cwd = await deps.directory(sessionID)
+    const resolved = await resolveSession(sessionID, cwd, deps, (value) => {
+      warning = value
+    })
+    client = resolved.client
+    acpSessionID = resolved.acpSessionID
+  } catch (error) {
+    logWarn("acp", message(error))
+    yield* say(`ACP 连接失败：${explain(error, deps.runtime.status.failure)}`)
+    yield finish(OTHER, EMPTY_USAGE)
+    return
+  }
+
+  if (warning !== undefined) yield* say(warning)
+
+  let textID: string | undefined
+  let textMessageID: string | undefined
+  let reasoningID: string | undefined
+  let reasoningMessageID: string | undefined
+
+  function* closeText(): Generator<LanguageModelV3StreamPart> {
+    if (textID === undefined) return
+    yield { type: "text-end", id: textID }
+    textID = undefined
+    textMessageID = undefined
+  }
+
+  function* closeReasoning(): Generator<LanguageModelV3StreamPart> {
+    if (reasoningID === undefined) return
+    yield { type: "reasoning-end", id: reasoningID }
+    reasoningID = undefined
+    reasoningMessageID = undefined
+  }
+
+  const running = client.prompt(acpSessionID, text, { sessionID, cwd }, options.abortSignal)
+  const tools = new ToolProjector({ cwd })
+  const usage: TurnUsage = {}
+  let response: PromptResponse = { stopReason: "cancelled" }
+
+  try {
+    for await (const item of withHeartbeat(running.updates, running.waitingForPermission)) {
+      if (item === HEARTBEAT) {
+        // A no-op part gives OpenCode a chance to apply a user interrupt while
+        // the agent is blocked on an approval request.
+        yield { type: "raw", rawValue: { acp: "approval-wait" } }
+        continue
+      }
+
+      const update = item
+
+      if (update.sessionUpdate === "agent_message_chunk") {
+        if (update.content.type !== "text" || update.content.text.length === 0) continue
+
+        yield* closeReasoning()
+
+        if (textID === undefined || (update.messageId != null && update.messageId !== textMessageID)) {
+          yield* closeText()
+          textID = crypto.randomUUID()
+          textMessageID = update.messageId ?? undefined
+          yield { type: "text-start", id: textID }
+        }
+
+        yield { type: "text-delta", id: textID, delta: update.content.text }
+        continue
+      }
+
+      if (update.sessionUpdate === "agent_thought_chunk") {
+        if (update.content.type !== "text" || update.content.text.length === 0) continue
+
+        yield* closeText()
+
+        if (reasoningID === undefined || (update.messageId != null && update.messageId !== reasoningMessageID)) {
+          yield* closeReasoning()
+          reasoningID = crypto.randomUUID()
+          reasoningMessageID = update.messageId ?? undefined
+          yield { type: "reasoning-start", id: reasoningID }
+        }
+
+        yield { type: "reasoning-delta", id: reasoningID, delta: update.content.text }
+        continue
+      }
+
+      if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+        yield* closeReasoning()
+        yield* closeText()
+
+        for (const part of tools.update(update)) yield part
+        continue
+      }
+
+      if (update.sessionUpdate === "usage_update") {
+        noteUsageUpdate(usage, update)
+        if (usage.contextWindow !== undefined) deps.onContextWindow?.(usage.contextWindow)
+        continue
+      }
+
+      if (update.sessionUpdate === "session_info_update") {
+        if (typeof update.title === "string") {
+          const title = update.title.trim()
+          if (deps.titles.remember(sessionID, title)) deps.onTitle?.(sessionID, title)
+        }
+        continue
+      }
+
+      // Plans, modes and commands are projected in later milestones.
+    }
+
+    if (running.error !== undefined) throw running.error
+    response = running.response ?? response
+  } catch (error) {
+    yield* closeReasoning()
+    yield* closeText()
+    for (const part of tools.finish()) yield part
+    logWarn("acp", message(error))
+    yield* say(`ACP 请求失败：${explain(error, client.failure)}`)
+    yield finish(OTHER, EMPTY_USAGE)
+    return
+  } finally {
+    running.dispose()
+  }
+
+  yield* closeReasoning()
+  yield* closeText()
+  for (const part of tools.finish()) yield part
+  yield finish(stopReasonOf(response.stopReason), usageOf(response, usage))
+}
+
+/** Sentinel yielded while the agent is blocked on an approval request. */
+const HEARTBEAT = Symbol("heartbeat")
+
+/** How often to check whether OpenCode has an interrupt to apply. */
+const HEARTBEAT_MS = 400
+
+/**
+ * Wraps the update stream so a pending approval cannot block interruption.
+ *
+ * OpenCode applies a user interrupt when the provider yields another stream
+ * part. Normal silent thinking keeps the M1 trade-off (wait for the next ACP
+ * update), but an approval can wait indefinitely, so a heartbeat is emitted
+ * for exactly that window.
+ */
+async function* withHeartbeat(
+  updates: AsyncIterable<SessionUpdate>,
+  waiting: () => boolean,
+): AsyncGenerator<SessionUpdate | typeof HEARTBEAT> {
+  const iterator = updates[Symbol.asyncIterator]()
+  let pending = iterator.next()
+
+  try {
+    for (;;) {
+      const next = await nextOrTimeout(pending, HEARTBEAT_MS)
+
+      if (next === HEARTBEAT) {
+        if (waiting()) yield HEARTBEAT
+        continue
+      }
+
+      pending = iterator.next()
+      if (next.done) return
+      yield next.value
+    }
+  } finally {
+    void iterator.return?.()
+  }
+}
+
+function nextOrTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof HEARTBEAT> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(HEARTBEAT), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
+/** Reuses the stored ACP session when possible, otherwise starts a new one. */
+async function resolveSession(
+  sessionID: string,
+  cwd: string,
+  deps: AcpModelDeps,
+  warn: (message: string) => void,
+): Promise<{ client: AcpClient; acpSessionID: string }> {
+  const agentID = deps.runtime.agent.id
+  const client = await deps.runtime.ensureClient()
+  const binding = await deps.bindings.get(agentID, sessionID)
+
+  if (binding !== undefined && binding.cwd === cwd) {
+    if (client.hasSession(binding.sessionId)) return { client, acpSessionID: binding.sessionId }
+
+    if (client.canLoadSession) {
+      try {
+        await client.loadSession(binding.sessionId, cwd)
+        return { client, acpSessionID: binding.sessionId }
+      } catch (error) {
+        logWarn("acp", `session/load failed: ${message(error)}`)
+        warn(`未能恢复上一次的 ACP 会话（${explain(error, client.failure)}），已新建会话；之前的上下文不在本轮内。`)
+      }
+    }
+  }
+
+  const acpSessionID = await client.newSession(cwd)
+  await deps.bindings.save(agentID, sessionID, { sessionId: acpSessionID, cwd })
+  return { client, acpSessionID }
+}
+
+async function* say(text: string): AsyncGenerator<LanguageModelV3StreamPart> {
+  const id = crypto.randomUUID()
+  yield { type: "text-start", id }
+  yield { type: "text-delta", id, delta: text }
+  yield { type: "text-end", id }
+}
+
+function finish(reason: LanguageModelV3FinishReason, usage: LanguageModelV3Usage): LanguageModelV3StreamPart {
+  return { type: "finish", finishReason: reason, usage }
+}
+
+function stopReasonOf(reason: StopReason): LanguageModelV3FinishReason {
+  if (reason === "end_turn") return { unified: "stop", raw: reason }
+  if (reason === "max_tokens") return { unified: "length", raw: reason }
+  return { unified: "other", raw: reason }
+}
+
+function toStream(iterator: AsyncGenerator<LanguageModelV3StreamPart>): ReadableStream<LanguageModelV3StreamPart> {
+  return new ReadableStream({
+    async pull(controller) {
+      const next = await iterator.next()
+      if (next.done) controller.close()
+      else controller.enqueue(next.value)
+    },
+    async cancel() {
+      await iterator.return(undefined)
+    },
+  })
+}
+
+function lastUserText(prompt: LanguageModelV3Prompt): string {
+  for (let index = prompt.length - 1; index >= 0; index--) {
+    const message = prompt[index]
+    if (message?.role !== "user") continue
+    return message.content
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n")
+      .trim()
+  }
+  return ""
+}
+
+function sessionIDOf(options: LanguageModelV3CallOptions): string | undefined {
+  const header = options.headers?.["x-opencode-session-id"]
+  if (typeof header === "string" && header.length > 0) return header
+
+  for (const value of Object.values(options.providerOptions ?? {})) {
+    if (value === null || typeof value !== "object") continue
+    const candidate = (value as Record<string, unknown>)["sessionID"]
+    if (typeof candidate === "string" && candidate.length > 0) return candidate
+  }
+  return undefined
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
