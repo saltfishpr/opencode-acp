@@ -12,13 +12,14 @@ flowchart LR
 
 ## 功能
 
-- 模型选择器中出现 `acp-agy/default`，选中后整轮对话由 `agy` 执行。
+- 模型选择器列出 agent 通过 ACP 报告的全部模型（`agy` 为 11 个 Gemini / Claude / GPT-OSS 模型），选中后整轮对话由该模型执行。
+- 每个模型带 thinking level 二级选择（如 Low / Medium / High / Extra），与 agent 的 `thought_level` 一一对应。
 - 正文和思考按流式输出。
 - 远端工具调用显示为 OpenCode 原生卡片：`bash`、`read` / `list`、`grep` / `glob`、`edit` / `write`（带 diff）、`webfetch`，其他工具使用 `acp_<name>` 通用卡。OpenCode 只渲染这些卡片，不会重复执行命令或修改文件。
 - 审批使用原生权限卡片，可以允许一次、始终允许或拒绝。
 - 会话映射保存在插件 storage 中。OpenCode server 重启后，下一轮通过 `session/load` 恢复远端上下文。
 - ACP 会话标题会成为 OpenCode 标题；token 统计包含 cache 和 reasoning；上下文窗口从 agent 的 `usage_update` 学习。
-- 桌面端设置页展示 agent 配置、CLI 检测、默认模型、上下文窗口、进程状态和日志级别。
+- 桌面端设置页展示 agent 配置、CLI 检测、默认模型、模型列表、上下文窗口、进程状态和日志级别。
 
 ## 前置条件
 
@@ -54,7 +55,7 @@ flowchart LR
 
 `package` 建议写绝对路径。上面的 `env` 只在需要代理时添加，请替换成实际代理地址。
 
-保存配置后重启 OpenCode 或重载插件。在 Desktop 的模型选择器中选择 Antigravity 的 `acp-agy/default` 即可开始对话。如果模型没有出现，先查看设置页中的 agent 状态，或参考下方“故障排查”。
+保存配置后重启 OpenCode 或重载插件。模型列表由插件在启动后向 agent 查询，首次查询完成时选择器会自动刷新。之后选择 Antigravity 下的任意模型即可开始对话。如果模型没有出现，先查看设置页中的 agent 状态，或参考下方“故障排查”。
 
 ### 配置项
 
@@ -80,7 +81,7 @@ flowchart LR
 
 ## 使用
 
-1. 在模型选择器中选择 `acp-agy/default`。
+1. 在模型选择器中选择一个模型，需要时在旁边的二级菜单中选择 thinking level。
 2. 正常发送消息。只有最新一条用户消息的文本会转发给 agent；OpenCode 的系统提示、历史消息、图片附件和工具记录不会发送。
 3. agent 自己决定调用哪些工具。工具卡和 diff 由 OpenCode 渲染，实际命令和文件操作在 agent 进程中执行。
 4. 需要审批时会出现原生权限卡：
@@ -90,6 +91,14 @@ flowchart LR
 
    审批卡没有单独的“取消”按钮。从外部中断整个会话时，挂起的 ACP 请求会被回复为 `cancelled`，对话正常结束。
 5. 点击停止会向 agent 发送 `session/cancel`，并结束当前流。
+
+### 模型与 thinking level
+
+- 模型列表和每个模型支持的 thinking level 来自 agent 的 `session/new` 响应。插件在启动后用一个短会话采集，采集完成后写入缓存并刷新模型目录。
+- 模型列表保存在插件 storage，后续启动先显示缓存，再后台刷新。首次运行且离线时选择器可能暂时为空。
+- 可以在对话中随时切换模型或 thinking level。插件在发送下一条消息前调用 `session/set_config_option`，ACP 会话保留上下文，已经生成的内容不受影响。
+- 模型旁边的 “Default” 表示不指定 variant，插件会使用该模型在 agent 中的默认 thinking level。
+- 旧版本插件创建的会话保存的是 `acp-agy/default`，升级后需要重新选择模型。
 
 ### 会话与标题
 
@@ -109,7 +118,7 @@ flowchart LR
 
 - 每个已配置 agent 的状态：可用、未安装、已禁用或暂未接入。
 - CLI 的解析路径和 `--version` 输出。
-- 默认模型和模型 ID、当前上下文窗口。
+- agent 的默认模型、完整模型列表和当前上下文窗口。
 - agent 进程是否运行、PID，以及最近一次启动失败原因。
 - 插件的日志级别和上下文覆盖值。
 
@@ -118,6 +127,7 @@ flowchart LR
 ## 限制
 
 - Codex 接入尚未实现，`acp-codex` 不会提供模型。
+- 模型目录需要开一个短会话向 agent 采集；agent 不支持 `session/close` 时，会在 agent 侧留下一个空会话。
 - 只针对 Desktop 验证；TUI 未适配。
 - OpenCode 的 revert / snapshot 对远端 agent 的改动无效，需要撤销时使用 git。
 - 插件 API 不提供表单，`elicitation/create` 会被统一拒绝，并在助手正文中说明。
@@ -127,7 +137,8 @@ flowchart LR
 
 | 现象 | 处理 |
 |---|---|
-| 模型选择器里没有 `acp-agy/default` | 确认 `agy` 已安装且在 `PATH` 中；在设置页查看状态，或检查配置里的 `command` |
+| 模型选择器里没有 `acp-agy` 的模型 | 首次启动后等待几秒，插件采集完模型目录会刷新；确认 `agy` 已安装且在 `PATH` 中；在设置页查看状态，或检查配置里的 `command` |
+| 模型列表为空且设置页提示采集失败 | 检查网络和 `agents[].env` 中的代理配置；已缓存的模型列表仍会显示 |
 | 第一轮卡住，约 60 秒后报握手超时 | 网络无法访问模型目录；在 `agents[].env` 中设置 `HTTPS_PROXY` / `HTTP_PROXY` |
 | 提示远端 agent 尚未登录或没有凭据 | 先在终端运行一次 Antigravity CLI 完成登录 |
 | 提示找不到可执行文件 | 安装对应 CLI，或把 `command` 改成实际路径 |

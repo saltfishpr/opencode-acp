@@ -9,10 +9,12 @@ import {
   type PromptResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SessionConfigOption,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk"
 import { declineElicitation, elicitationNotice, elicitationSession } from "../interaction/elicitation.js"
 import { logInfo, logWarn } from "../log.js"
+import { selectOption, valuesOf, type Catalog, type CatalogModel } from "./catalog.js"
 import { AcpStartError, describeExit, type AcpExit, type FailureContext } from "./errors.js"
 
 /** Identifies the OpenCode session and turn that an ACP request belongs to. */
@@ -50,6 +52,12 @@ const HANDSHAKE_TIMEOUT_MS = 60_000
 /** How long to wait for `session/prompt` to settle after `session/cancel`. */
 const CANCEL_TIMEOUT_MS = 10_000
 
+/** Bound for one `session/set_config_option` round trip; it only changes local state. */
+const CONFIG_TIMEOUT_MS = 15_000
+
+/** Bound for `session/close` on the short-lived discovery session. */
+const CLOSE_TIMEOUT_MS = 5_000
+
 /**
  * One running ACP agent process plus its JSON-RPC connection.
  *
@@ -62,6 +70,7 @@ export class AcpClient {
   private readonly connection: ClientConnection
   private readonly queues: Map<string, UpdateQueue>
   private readonly turns: Map<string, TurnState>
+  private readonly configs: Map<string, readonly SessionConfigOption[]>
   private readonly loaded = new Set<string>()
   private readonly name: string
   private readonly command: string
@@ -79,6 +88,7 @@ export class AcpClient {
     initialize: InitializeResponse,
     queues: Map<string, UpdateQueue>,
     turns: Map<string, TurnState>,
+    configs: Map<string, readonly SessionConfigOption[]>,
     name: string,
     command: string,
     usage: ContextWindow,
@@ -88,6 +98,7 @@ export class AcpClient {
     this.initialize = initialize
     this.queues = queues
     this.turns = turns
+    this.configs = configs
     this.name = name
     this.command = command
     this.usage = usage
@@ -137,6 +148,7 @@ export class AcpClient {
 
     const queues = new Map<string, UpdateQueue>()
     const turns = new Map<string, TurnState>()
+    const configs = new Map<string, readonly SessionConfigOption[]>()
     const usage: ContextWindow = {}
 
     const app = client({ name: "opencode-acp" })
@@ -144,6 +156,10 @@ export class AcpClient {
         const update = params.update
         if (update.sessionUpdate === "usage_update" && Number.isFinite(update.size) && update.size > 0) {
           if (usage.size === undefined || update.size > usage.size) usage.size = update.size
+        }
+
+        if (update.sessionUpdate === "config_option_update") {
+          configs.set(params.sessionId, update.configOptions)
         }
 
         queues.get(params.sessionId)?.push(update)
@@ -206,7 +222,17 @@ export class AcpClient {
         { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
       )
 
-      const acp = new AcpClient(child, connection, initialize, queues, turns, options.name, options.command, usage)
+      const acp = new AcpClient(
+        child,
+        connection,
+        initialize,
+        queues,
+        turns,
+        configs,
+        options.name,
+        options.command,
+        usage,
+      )
       return acp
     } catch (error) {
       connection.close()
@@ -239,6 +265,11 @@ export class AcpClient {
     return this.initialize.agentCapabilities?.loadSession === true
   }
 
+  /** Whether the agent advertises `session/close`, used to clean up discovery sessions. */
+  get canCloseSession(): boolean {
+    return this.initialize.agentCapabilities?.sessionCapabilities?.close != null
+  }
+
   /** Whether the underlying process or connection has gone away. */
   get isClosed(): boolean {
     return this.connection.signal.aborted
@@ -258,6 +289,7 @@ export class AcpClient {
       { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
     )
 
+    this.configs.set(response.sessionId, response.configOptions ?? [])
     this.loaded.add(response.sessionId)
     return response.sessionId
   }
@@ -270,13 +302,104 @@ export class AcpClient {
   async loadSession(sessionId: string, cwd: string): Promise<void> {
     if (this.isClosed) throw this.closedError()
 
-    await this.connection.agent.request(
+    const response = await this.connection.agent.request(
       "session/load",
       { sessionId, cwd, mcpServers: [] },
       { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
     )
 
+    this.configs.set(sessionId, response.configOptions ?? [])
     this.loaded.add(sessionId)
+  }
+
+  /** Latest configuration state the agent reported for a session. */
+  configOptions(sessionId: string): readonly SessionConfigOption[] | undefined {
+    return this.configs.get(sessionId)
+  }
+
+  /**
+   * Changes one session configuration value, such as the model or thinking
+   * level. The agent answers with the complete configuration state, which
+   * replaces what the client knew before.
+   */
+  async setConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string,
+  ): Promise<readonly SessionConfigOption[]> {
+    if (this.isClosed) throw this.closedError()
+
+    const response = await this.connection.agent.request(
+      "session/set_config_option",
+      { sessionId, configId, value },
+      { cancellationSignal: AbortSignal.timeout(CONFIG_TIMEOUT_MS), stopWaitingOnCancel: true },
+    )
+
+    this.configs.set(sessionId, response.configOptions)
+    return response.configOptions
+  }
+
+  /**
+   * Reads the agent's model catalog by creating a short-lived session and
+   * selecting each advertised model, because thinking levels are reported per
+   * model and only through the session configuration state.
+   */
+  async discoverModels(cwd: string): Promise<Catalog> {
+    if (this.isClosed) throw this.closedError()
+
+    const created = await this.connection.agent.request(
+      "session/new",
+      { cwd, mcpServers: [] },
+      { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
+    )
+
+    const sessionId = created.sessionId
+    const initial = created.configOptions ?? []
+    this.configs.set(sessionId, initial)
+
+    const models: CatalogModel[] = []
+    try {
+      const model = selectOption(initial, "model")
+
+      if (model !== undefined) {
+        for (const value of valuesOf(model)) {
+          const options = await this.setConfigOption(sessionId, model.id, value.value)
+          const thought = selectOption(options, "thought_level")
+
+          models.push({
+            id: value.value,
+            name: value.name,
+            ...(value.description == null ? {} : { description: value.description }),
+            thoughts: valuesOf(thought).map((item) => ({ value: item.value, name: item.name })),
+            ...(thought === undefined ? {} : { defaultThought: thought.currentValue }),
+          })
+        }
+      }
+
+      return {
+        models,
+        ...(model === undefined ? {} : { defaultModel: model.currentValue }),
+      }
+    } finally {
+      await this.closeSession(sessionId)
+    }
+  }
+
+  /** Closes a session this client created; ignored when the agent does not advertise it. */
+  async closeSession(sessionId: string): Promise<void> {
+    this.loaded.delete(sessionId)
+    this.configs.delete(sessionId)
+    if (!this.canCloseSession || this.isClosed) return
+
+    try {
+      await this.connection.agent.request(
+        "session/close",
+        { sessionId },
+        { cancellationSignal: AbortSignal.timeout(CLOSE_TIMEOUT_MS), stopWaitingOnCancel: true },
+      )
+    } catch (error) {
+      logWarn(this.name, `session/close failed: ${errorMessage(error)}`)
+    }
   }
 
   /** Whether this process has created or loaded the ACP session. */

@@ -5,6 +5,7 @@ import { promisify } from "node:util"
 import type { AgentConfig } from "./config.js"
 import { describeExit } from "./acp/errors.js"
 import type { AgentRuntime } from "./acp/runtime.js"
+import { catalogOf } from "./provider/catalog.js"
 import { DEFAULT_CONTEXT_LIMIT, type AgentAvailability } from "./provider/register.js"
 
 const exec = promisify(execFile)
@@ -81,7 +82,8 @@ export async function diagnosticsOf(input: DiagnosticsInput): Promise<Diagnostic
     const status = statusOf(agent, found.path)
     const runtime = input.runtimes.get(agent.id)
     const state = runtime?.status
-    const models = agent.implemented ? ["default"] : []
+    const catalog = catalogOf(agent.id)
+    const models = agent.implemented ? (catalog?.models.map((model) => model.id) ?? []) : []
 
     agents.push({
       id: agent.id,
@@ -94,7 +96,7 @@ export async function diagnosticsOf(input: DiagnosticsInput): Promise<Diagnostic
       version: found.version,
       status,
       note: noteOf(agent, status),
-      defaultModel: models[0] === "default" ? `${agent.id}/default` : "",
+      defaultModel: catalog?.defaultModel === undefined ? "" : `${agent.id}/${catalog.defaultModel}`,
       models,
       contextLimit:
         input.contextLimit ?? runtime?.status.contextWindow ?? DEFAULT_CONTEXT_LIMIT,

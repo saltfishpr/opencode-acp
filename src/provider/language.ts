@@ -8,14 +8,25 @@ import type {
   LanguageModelV3Usage,
 } from "@ai-sdk/provider"
 import type { PromptResponse, SessionUpdate, StopReason } from "@agentclientprotocol/sdk"
+import { selectOption } from "../acp/catalog.js"
 import type { AcpClient } from "../acp/client.js"
 import { explain } from "../acp/errors.js"
 import type { AgentRuntime } from "../acp/runtime.js"
 import { EMPTY_USAGE, noteUsageUpdate, usageOf, type TurnUsage } from "../acp/usage.js"
-import { logWarn } from "../log.js"
+import { logInfo, logWarn } from "../log.js"
 import type { SessionBindings } from "../session/binding.js"
 import type { SessionTitles } from "../session/title.js"
 import { ToolProjector } from "./projection.js"
+
+/** Model and thinking level chosen for one OpenCode turn. */
+export interface AcpModelSelection {
+  /** ACP model value, which is also the OpenCode model ID. */
+  readonly model: string
+  /** ACP `thought_level` value from the selected variant. */
+  readonly thought?: string
+  /** Thinking level the agent uses for this model when no variant is selected. */
+  readonly defaultThought?: string
+}
 
 /** Dependencies an ACP language model needs to run a turn. */
 export interface AcpModelDeps {
@@ -39,15 +50,15 @@ export interface AcpModelDeps {
  * OpenCode session are serialized, and aborting the call sends
  * `session/cancel` to the agent.
  */
-export function acpLanguageModel(modelID: string, deps: AcpModelDeps): LanguageModelV3 {
+export function acpLanguageModel(selection: AcpModelSelection, deps: AcpModelDeps): LanguageModelV3 {
   return {
     specificationVersion: "v3",
     provider: "acp",
-    modelId: modelID,
+    modelId: selection.model,
     supportedUrls: {},
     async doGenerate(options): Promise<LanguageModelV3GenerateResult> {
       const parts: LanguageModelV3StreamPart[] = []
-      for await (const part of run(options, deps, modelID)) parts.push(part)
+      for await (const part of run(options, deps, selection)) parts.push(part)
 
       const text = parts.flatMap((part) => (part.type === "text-delta" ? [part.delta] : []))
       const reasoning = parts.flatMap((part) => (part.type === "reasoning-delta" ? [part.delta] : []))
@@ -64,7 +75,7 @@ export function acpLanguageModel(modelID: string, deps: AcpModelDeps): LanguageM
       }
     },
     async doStream(options) {
-      return { stream: toStream(run(options, deps, modelID)) }
+      return { stream: toStream(run(options, deps, selection)) }
     },
   }
 }
@@ -81,13 +92,13 @@ const OTHER: LanguageModelV3FinishReason = { unified: "other", raw: "other" }
 async function* run(
   options: LanguageModelV3CallOptions,
   deps: AcpModelDeps,
-  modelID: string,
+  selection: AcpModelSelection,
 ): AsyncGenerator<LanguageModelV3StreamPart> {
   const sessionID = sessionIDOf(options)
   const prompt = lastUserText(options.prompt)
 
   yield { type: "stream-start", warnings: [] }
-  yield { type: "response-metadata", modelId: modelID }
+  yield { type: "response-metadata", modelId: selection.model }
 
   if (sessionID === undefined) {
     yield* say("无法确定 OpenCode 会话 ID，ACP 请求未发送。")
@@ -103,7 +114,7 @@ async function* run(
 
   const release = await deps.runtime.lock(sessionID)
   try {
-    yield* turn(sessionID, prompt, options, deps)
+    yield* turn(sessionID, prompt, options, deps, selection)
   } finally {
     release()
   }
@@ -114,6 +125,7 @@ async function* turn(
   text: string,
   options: LanguageModelV3CallOptions,
   deps: AcpModelDeps,
+  selection: AcpModelSelection,
 ): AsyncGenerator<LanguageModelV3StreamPart> {
   let warning: string | undefined
   let client: AcpClient
@@ -135,6 +147,15 @@ async function* turn(
   }
 
   if (warning !== undefined) yield* say(warning)
+
+  try {
+    await applySelection(client, acpSessionID, selection)
+  } catch (error) {
+    logWarn("acp", message(error))
+    yield* say(`无法切换到所选 ACP 模型：${explain(error, client.failure)}`)
+    yield finish(OTHER, EMPTY_USAGE)
+    return
+  }
 
   let textID: string | undefined
   let textMessageID: string | undefined
@@ -301,6 +322,34 @@ function nextOrTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof H
       },
     )
   })
+}
+
+/**
+ * Pushes the picker's model and thinking level into the ACP session.
+ *
+ * Configuration is session state, so a selection made between messages only
+ * reaches the agent when the next turn syncs it. An absent thinking level falls
+ * back to the agent's default for that model, which is what OpenCode's
+ * "Default" variant means.
+ */
+async function applySelection(
+  client: AcpClient,
+  sessionId: string,
+  selection: AcpModelSelection,
+): Promise<void> {
+  const model = selectOption(client.configOptions(sessionId), "model")
+  if (model !== undefined && model.currentValue !== selection.model) {
+    await client.setConfigOption(sessionId, model.id, selection.model)
+    logInfo("acp", `model switched to ${selection.model}`)
+  }
+
+  const thought = selection.thought ?? selection.defaultThought
+  if (thought === undefined) return
+
+  const current = selectOption(client.configOptions(sessionId), "thought_level")
+  if (current === undefined || current.currentValue === thought) return
+  await client.setConfigOption(sessionId, current.id, thought)
+  logInfo("acp", `thinking level switched to ${thought}`)
 }
 
 /** Reuses the stored ACP session when possible, otherwise starts a new one. */

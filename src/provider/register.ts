@@ -4,6 +4,7 @@ import type { AgentRuntime } from "../acp/runtime.js"
 import { logWarn } from "../log.js"
 import { SessionBindings, sessionDirectory } from "../session/binding.js"
 import type { SessionTitles } from "../session/title.js"
+import { catalogOf, refreshCatalog, seedCatalog } from "./catalog.js"
 import { acpLanguageModel } from "./language.js"
 
 /**
@@ -82,16 +83,29 @@ export async function registerAgent(
   const id = Provider.ID.make(agent.id)
   const registrations: Disposable[] = []
   const real = options.availability === "ready"
+
+  // Show the previous run's list immediately; discovery refreshes it in the
+  // background and reloads the provider once the agent answers.
+  await seedCatalog(ctx, agent.id)
+
   const models = () => {
     const limit = options.contextLimit ?? options.runtime.status.contextWindow ?? DEFAULT_CONTEXT_LIMIT
     const list = []
 
     if (real) {
-      list.push({
-        ...Model.Info.default(id, Model.ID.make("default")),
-        name: agent.name,
-        limit: { context: limit, output: 32_000 },
-      })
+      for (const entry of catalogOf(agent.id)?.models ?? []) {
+        list.push({
+          ...Model.Info.default(id, Model.ID.make(entry.id)),
+          name: entry.name,
+          limit: { context: limit, output: 32_000 },
+          // OpenCode reserves the variant id "default" for "no variant", which
+          // already means the agent's default level for this model.
+          variants: entry.thoughts.flatMap((thought) => {
+            if (thought.value === "default") return []
+            return [{ id: Model.VariantID.make(thought.value), settings: { acpThought: thought.value } }]
+          }),
+        })
+      }
     }
 
     appliedContexts.set(agent.id, limit)
@@ -122,41 +136,52 @@ export async function registerAgent(
 
   let reloadTimer: ReturnType<typeof setTimeout> | undefined
 
-  const model = (modelID: string) =>
-    acpLanguageModel(modelID, {
-      runtime: options.runtime,
-      bindings: options.bindings,
-      directory: (sessionID) => sessionDirectory(ctx, sessionID),
-      titles: options.titles,
-      onTitle: (sessionID, title) => {
-        void applyAcpTitle(ctx, sessionID, title)
-      },
-      onContextWindow: (size) => {
-        if (options.contextLimit !== undefined || appliedContexts.get(agent.id) === size) return
-        appliedContexts.set(agent.id, size)
-        if (reloadTimer !== undefined) return
+  const language = (info: Model.Info) => {
+    const thought = info.settings?.["acpThought"]
+    const entry = catalogOf(agent.id)?.models.find((model) => model.id === info.id)
 
-        // Reload once after the first turn so the model catalog shows the
-        // window the agent actually reported.
-        reloadTimer = setTimeout(() => {
-          reloadTimer = undefined
-          void ctx.provider.reload().catch((error: unknown) => {
-            logWarn("acp", `provider reload after context update failed: ${message(error)}`)
-          })
-        }, 0)
-        reloadTimer.unref?.()
+    return acpLanguageModel(
+      {
+        model: info.id,
+        ...(typeof thought === "string" ? { thought } : {}),
+        ...(entry?.defaultThought === undefined ? {} : { defaultThought: entry.defaultThought }),
       },
-    })
+      {
+        runtime: options.runtime,
+        bindings: options.bindings,
+        directory: (sessionID) => sessionDirectory(ctx, sessionID),
+        titles: options.titles,
+        onTitle: (sessionID, title) => {
+          void applyAcpTitle(ctx, sessionID, title)
+        },
+        onContextWindow: (size) => {
+          if (options.contextLimit !== undefined || appliedContexts.get(agent.id) === size) return
+          appliedContexts.set(agent.id, size)
+          if (reloadTimer !== undefined) return
+
+          // Reload once after the first turn so the model catalog shows the
+          // window the agent actually reported.
+          reloadTimer = setTimeout(() => {
+            reloadTimer = undefined
+            void ctx.provider.reload().catch((error: unknown) => {
+              logWarn("acp", `provider reload after context update failed: ${message(error)}`)
+            })
+          }, 0)
+          reloadTimer.unref?.()
+        },
+      },
+    )
+  }
 
   registrations.push(
     await ctx.aisdk.hook("sdk", (event) => {
-      event.sdk = { languageModel: (modelID: string) => model(modelID) }
+      event.sdk = { languageModel: () => language(event.model) }
     }, { providerID: id }),
   )
 
   registrations.push(
     await ctx.aisdk.hook("language", (event) => {
-      event.language = model(event.model.id)
+      event.language = language(event.model)
     }, { providerID: id }),
   )
 
@@ -170,6 +195,10 @@ export async function registerAgent(
       { providerID: id },
     ),
   )
+
+  // Starts the agent in the background; a failure leaves the cached list (or
+  // an empty provider) in place instead of blocking plugin setup.
+  if (real) void refreshCatalog(ctx, options.runtime)
 
   return registrations
 }

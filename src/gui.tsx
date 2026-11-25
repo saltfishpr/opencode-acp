@@ -142,7 +142,10 @@ export default Plugin.define({
                       <ctx.ui.SettingsRow
                         id={`acp-model-${agent.id}`}
                         title={`${agent.name} · ${ctx.t("model")}`}
-                        description={[agent.defaultModel || ctx.t("notFound"), agent.models.join(", ")]
+                        description={[
+                          agent.defaultModel || ctx.t("notFound"),
+                          agent.models.length === 0 ? "" : `${agent.models.length} ${ctx.t("models")}`,
+                        ]
                           .filter((item) => item.length > 0)
                           .join(" · ")}
                       >
