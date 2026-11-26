@@ -471,6 +471,9 @@ export async function buildImportPayload(input: HistoryInput): Promise<ImportPay
   for (const update of input.updates) {
     switch (update.sessionUpdate) {
       case "user_message_chunk": {
+        // A new user message ends the previous turn: ACP has no explicit
+        // end-of-assistant update, and agents may omit message IDs.
+        await flushAssistant();
         if (
           user !== undefined &&
           user.messageID !== undefined &&
