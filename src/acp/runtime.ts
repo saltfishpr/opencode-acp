@@ -19,6 +19,8 @@ export interface AgentRuntimeSnapshot {
   readonly running: boolean;
   readonly pid: number | undefined;
   readonly contextWindow: number | undefined;
+  /** `undefined` until a process has reported its prompt capabilities. */
+  readonly supportsImages: boolean | undefined;
   readonly exit: AcpExit | undefined;
   readonly failure: FailureContext | undefined;
 }
@@ -36,10 +38,13 @@ export class AgentRuntime {
   private closed = false;
   private paused = false;
   private failureMessage: string | undefined;
+  private capabilities: boolean | undefined;
 
   constructor(
     readonly agent: AgentConfig,
     readonly path: string,
+    /** Called when a started process reports different prompt capabilities than the last one. */
+    private readonly onCapabilities?: (supportsImages: boolean) => void,
   ) {}
 
   /** Pauses new turns only if this process has no admitted turns. */
@@ -103,7 +108,20 @@ export class AgentRuntime {
     }
     this.client = client;
     this.failureMessage = undefined;
+    this.reportCapabilities(client);
     return this.client;
+  }
+
+  /**
+   * Reloads providers when a restarted process advertises different prompt
+   * capabilities, because the model catalog outlives individual processes.
+   */
+  private reportCapabilities(client: AcpClient): void {
+    const images = client.supportsImages;
+    if (images === this.capabilities) return;
+
+    this.capabilities = images;
+    this.onCapabilities?.(images);
   }
 
   get status(): AgentRuntimeSnapshot {
@@ -112,6 +130,7 @@ export class AgentRuntime {
       running: client !== undefined && !client.isClosed,
       pid: client?.pid,
       contextWindow: client?.contextWindow,
+      supportsImages: client === undefined || client.isClosed ? undefined : client.supportsImages,
       exit: client?.exitInfo,
       failure: client?.failure,
     };

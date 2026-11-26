@@ -287,7 +287,9 @@ async function startAgent(ctx: Plugin.Context, agent: AgentConfig): Promise<void
   const path = findExecutable(agent);
   if (path === undefined) return;
   const active: AgentState = {
-    runtime: new AgentRuntime(agent, path),
+    runtime: new AgentRuntime(agent, path, () => {
+      setTimeout(() => void reloadProviders(), 0).unref();
+    }),
     name: agent.name,
     catalog: await loadCatalog(ctx.storage, agent),
     status: "discovering",

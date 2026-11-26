@@ -5,7 +5,9 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   type ClientConnection,
+  type ContentBlock,
   type InitializeResponse,
+  type PromptCapabilities,
   type PromptResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -271,6 +273,16 @@ export class AcpClient {
     return this.initialize.agentCapabilities?.sessionCapabilities?.close != null;
   }
 
+  /** Prompt content types the agent declared in `initialize`; a missing field means unsupported. */
+  get promptCapabilities(): PromptCapabilities | undefined {
+    return this.initialize.agentCapabilities?.promptCapabilities;
+  }
+
+  /** Whether the agent accepts `image` content blocks. */
+  get supportsImages(): boolean {
+    return this.promptCapabilities?.image === true;
+  }
+
   /** Whether the underlying process or connection has gone away. */
   get isClosed(): boolean {
     return this.connection.signal.aborted;
@@ -414,7 +426,12 @@ export class AcpClient {
    * ends the update stream once the agent answers or after a short grace
    * period.
    */
-  prompt(sessionId: string, text: string, context: AcpPromptContext, signal?: AbortSignal): AcpPrompt {
+  prompt(
+    sessionId: string,
+    content: readonly ContentBlock[],
+    context: AcpPromptContext,
+    signal?: AbortSignal,
+  ): AcpPrompt {
     if (signal?.aborted) return settledPrompt({ response: { stopReason: "cancelled" } });
     if (this.isClosed) return settledPrompt({ error: this.closedError() });
 
@@ -473,7 +490,7 @@ export class AcpClient {
       },
     };
 
-    this.connection.agent.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }).then(
+    this.connection.agent.request("session/prompt", { sessionId, prompt: [...content] }).then(
       (response) => finish({ response }),
       (error) => finish({ error }),
     );

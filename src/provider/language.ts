@@ -3,7 +3,6 @@ import type {
   LanguageModelV3CallOptions,
   LanguageModelV3FinishReason,
   LanguageModelV3GenerateResult,
-  LanguageModelV3Prompt,
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
 } from "@ai-sdk/provider";
@@ -16,6 +15,7 @@ import { EMPTY_USAGE, noteUsageUpdate, usageOf, type TurnUsage } from "../acp/us
 import { logInfo, logWarn } from "../log.js";
 import type { SessionBindings } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
+import { lastUserPrompt, type PromptContent } from "./content.js";
 import { ToolProjector } from "./projection.js";
 
 /** Model and thinking level chosen for one OpenCode turn. */
@@ -96,7 +96,7 @@ async function* run(
   selection: AcpModelSelection,
 ): AsyncGenerator<LanguageModelV3StreamPart> {
   const sessionID = sessionIDOf(options);
-  const prompt = lastUserText(options.prompt);
+  const content = lastUserPrompt(options.prompt);
 
   yield { type: "stream-start", warnings: [] };
   yield { type: "response-metadata", modelId: selection.model };
@@ -107,8 +107,10 @@ async function* run(
     return;
   }
 
-  if (prompt.length === 0) {
-    yield* say("这条消息没有可发送的文本内容。");
+  for (const note of content.warnings) yield* say(note);
+
+  if (content.blocks.length === 0) {
+    yield* say("这条消息没有可发送的内容。");
     yield finish(OTHER, EMPTY_USAGE);
     return;
   }
@@ -121,7 +123,7 @@ async function* run(
   }
   const release = await lock;
   try {
-    yield* turn(sessionID, prompt, options, deps, selection);
+    yield* turn(sessionID, content, options, deps, selection);
   } finally {
     release();
   }
@@ -129,7 +131,7 @@ async function* run(
 
 async function* turn(
   sessionID: string,
-  text: string,
+  content: PromptContent,
   options: LanguageModelV3CallOptions,
   deps: AcpModelDeps,
   selection: AcpModelSelection,
@@ -164,6 +166,22 @@ async function* turn(
     return;
   }
 
+  let blocks = content.blocks;
+
+  if (!client.supportsImages) {
+    const dropped = blocks.filter((block) => block.type === "image").length;
+    if (dropped > 0) {
+      blocks = blocks.filter((block) => block.type !== "image");
+      yield* say(`该 agent 未声明支持图片输入，已忽略 ${dropped} 张图片。`);
+    }
+  }
+
+  if (blocks.length === 0) {
+    yield* say("这条消息没有可发送的内容。");
+    yield finish(OTHER, EMPTY_USAGE);
+    return;
+  }
+
   let textID: string | undefined;
   let textMessageID: string | undefined;
   let reasoningID: string | undefined;
@@ -185,7 +203,7 @@ async function* turn(
 
   const running = client.prompt(
     acpSessionID,
-    text,
+    blocks,
     { sessionID, cwd, requestPermission: deps.requestPermission },
     options.abortSignal,
   );
@@ -418,18 +436,6 @@ function toStream(iterator: AsyncGenerator<LanguageModelV3StreamPart>): Readable
       await iterator.return(undefined);
     },
   });
-}
-
-function lastUserText(prompt: LanguageModelV3Prompt): string {
-  for (let index = prompt.length - 1; index >= 0; index--) {
-    const message = prompt[index];
-    if (message?.role !== "user") continue;
-    return message.content
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n")
-      .trim();
-  }
-  return "";
 }
 
 function sessionIDOf(options: LanguageModelV3CallOptions): string | undefined {

@@ -76,16 +76,24 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
 
         const info = { ...Provider.Info.empty(id), name: agent.name, activation: "enabled" as const, package: PACKAGE };
         const limit = agent.runtime.status.contextWindow ?? DEFAULT_CONTEXT_LIMIT;
-        const models = (agent.catalog?.models ?? []).map((entry) => ({
-          ...Model.Info.default(id, Model.ID.make(entry.id)),
-          name: entry.name,
-          limit: { context: limit, output: 32_000 },
-          // OpenCode reserves "default" for using the agent's own default level.
-          variants: entry.thoughts.flatMap((thought) => {
-            if (thought.value === "default") return [];
-            return [{ id: Model.VariantID.make(thought.value), settings: { acpThought: thought.value } }];
-          }),
-        }));
+        const supportsImages = agent.runtime.status.supportsImages === true;
+        const models = (agent.catalog?.models ?? []).map((entry) => {
+          const defaults = Model.Info.default(id, Model.ID.make(entry.id));
+          return {
+            ...defaults,
+            name: entry.name,
+            limit: { context: limit, output: 32_000 },
+            capabilities: {
+              ...defaults.capabilities,
+              input: supportsImages ? ["text", "image"] : ["text"],
+            },
+            // OpenCode reserves "default" for using the agent's own default level.
+            variants: entry.thoughts.flatMap((thought) => {
+              if (thought.value === "default") return [];
+              return [{ id: Model.VariantID.make(thought.value), settings: { acpThought: thought.value } }];
+            }),
+          };
+        });
 
         if (existing === undefined) editor.add({ info, models });
         else {
