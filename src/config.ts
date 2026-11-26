@@ -15,8 +15,6 @@ export interface AgentConfig {
   readonly args: readonly string[]
   readonly env: Readonly<Record<string, string>>
   readonly enabled: boolean
-  /** False for presets whose adapter is not shipped yet; they stay registered but hidden. */
-  readonly implemented: boolean
 }
 
 export interface Config {
@@ -30,9 +28,6 @@ export interface Config {
 /**
  * CLIs this plugin knows how to launch. They are only detected, never installed;
  * a missing executable is reported at startup and the agent stays unavailable.
- *
- * `acp-codex` is a registered preset so its configuration shape is stable, but
- * the Codex adapter is not implemented yet. It is never spawned or offered as a model.
  */
 export const PRESETS: readonly AgentConfig[] = [
   {
@@ -42,16 +37,6 @@ export const PRESETS: readonly AgentConfig[] = [
     args: ["acp"],
     env: {},
     enabled: true,
-    implemented: true,
-  },
-  {
-    id: "acp-codex",
-    name: "Codex",
-    command: "codex-acp",
-    args: [],
-    env: {},
-    enabled: true,
-    implemented: false,
   },
 ]
 
@@ -126,7 +111,6 @@ export function readConfig(raw: Readonly<Record<string, unknown>> | undefined): 
       args: args as string[],
       env: env as Record<string, string>,
       enabled: entry["enabled"] !== false,
-      implemented: preset?.implemented ?? true,
     })
   }
 

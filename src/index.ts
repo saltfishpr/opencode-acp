@@ -81,10 +81,6 @@ export default Plugin.define({
       `startup diagnostics: cwd=${process.cwd()} serverProxy=${proxy.length === 0 ? "none" : proxy.join(",")} ` +
         `contextLimit=${contextLimit ?? "learn-from-acp"} logLevel=${logLevel}`,
     )
-    if (agents.some((agent) => agent.id === "acp-codex" && agent.enabled)) {
-      logWarn("acp", "acp-codex is registered but unavailable: Codex integration is not implemented yet")
-    }
-
     installExitHook()
 
     return async () => {

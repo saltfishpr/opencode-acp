@@ -2,7 +2,7 @@
 
 把外部 ACP agent 接入 OpenCode Desktop。选中对应的 ACP 模型后，每条消息都交给 agent 在自己的进程里执行；OpenCode 负责显示对话、思考、工具卡片、diff 和审批，并保留会话历史。
 
-当前可用的是 Antigravity CLI（`agy acp`）。Codex 预留了 `acp-codex` 配置项，但尚未实现：它不会注册模型，也不会启动进程。
+内置支持 Antigravity CLI（`agy acp`）。
 
 ```mermaid
 flowchart LR
@@ -66,7 +66,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 ### 配置项
 
-`options.agents` 是 agent 列表。不写时使用内置 preset：`acp-agy` 和 `acp-codex`。
+`options.agents` 是 agent 列表。不写时使用内置 preset `acp-agy`。
 
 每个 agent 支持以下字段：
 
@@ -123,7 +123,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 打开 Settings › ACP，可以看到：
 
-- 每个已配置 agent 的状态：可用、未安装、已禁用或暂未接入。
+- 每个已配置 agent 的状态：可用、未安装或已禁用。
 - CLI 的解析路径和 `--version` 输出。
 - agent 进程是否运行、PID，以及最近一次启动失败原因。
 - 插件的日志级别。
@@ -132,7 +132,6 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 ## 限制
 
-- Codex 接入尚未实现，`acp-codex` 不会提供模型。
 - 模型目录需要开一个短会话向 agent 采集；agent 不支持 `session/close` 时，会在 agent 侧留下一个空会话。
 - 只针对 Desktop 验证；TUI 未适配。
 - OpenCode 的 revert / snapshot 对远端 agent 的改动无效，需要撤销时使用 git。

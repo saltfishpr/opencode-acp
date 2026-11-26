@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Expose external ACP agents (Antigravity, Codex) as OpenCode providers",
+  "description": "Expose external ACP agents as OpenCode providers",
   "exports": {
     ".": "./src/index.ts",
     "./gui-experimental": "./dist/gui-experimental.cjs"

@@ -26,7 +26,6 @@ export default Plugin.define({
       "status.ready": "Available",
       "status.missing": "Not installed",
       "status.disabled": "Disabled",
-      "status.deferred": "Not implemented yet",
     },
     zh: {
       title: "ACP",
@@ -48,7 +47,6 @@ export default Plugin.define({
       "status.ready": "可用",
       "status.missing": "未安装",
       "status.disabled": "已禁用",
-      "status.deferred": "暂未接入",
     },
   },
   setup(ctx) {
@@ -146,15 +144,6 @@ export default Plugin.define({
                     <span>{diagnostics().plugin.logLevel}</span>
                   </ctx.ui.SettingsRow>
                 </ctx.ui.SettingsSection>
-
-                <Show when={diagnostics().note !== ""}>
-                  <ctx.ui.SettingsSection>
-                    <ctx.ui.SettingsRow
-                      id="acp-note"
-                      title={diagnostics().note}
-                    />
-                  </ctx.ui.SettingsSection>
-                </Show>
               </>
             )}
           </Show>

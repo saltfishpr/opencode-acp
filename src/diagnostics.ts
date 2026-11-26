@@ -37,7 +37,6 @@ export interface Diagnostics {
     readonly contextLimit: number
   }
   readonly agents: readonly AgentDiagnostics[]
-  readonly note: string
 }
 
 export interface DiagnosticsInput {
@@ -83,7 +82,6 @@ export async function diagnosticsOf(input: DiagnosticsInput): Promise<Diagnostic
     const runtime = input.runtimes.get(agent.id)
     const state = runtime?.status
     const catalog = catalogOf(agent.id)
-    const models = agent.implemented ? (catalog?.models.map((model) => model.id) ?? []) : []
 
     agents.push({
       id: agent.id,
@@ -97,7 +95,7 @@ export async function diagnosticsOf(input: DiagnosticsInput): Promise<Diagnostic
       status,
       note: noteOf(agent, status),
       defaultModel: catalog?.defaultModel === undefined ? "" : `${agent.id}/${catalog.defaultModel}`,
-      models,
+      models: catalog?.models.map((model) => model.id) ?? [],
       contextLimit:
         input.contextLimit ?? runtime?.status.contextWindow ?? DEFAULT_CONTEXT_LIMIT,
       running: state?.running === true,
@@ -113,7 +111,6 @@ export async function diagnosticsOf(input: DiagnosticsInput): Promise<Diagnostic
       contextLimit: input.contextLimit ?? 0,
     },
     agents,
-    note: "Codex 接入暂缓；acp-codex 保持注册但不会启动。",
   }
 }
 
@@ -145,7 +142,6 @@ export function findExecutable(command: string, pathValue: string): string {
 
 /** Availability from configuration plus whether the executable resolved. */
 export function statusOf(agent: AgentConfig, path: string): AgentAvailability {
-  if (!agent.implemented) return "deferred"
   if (!agent.enabled) return "disabled"
   return path === "" ? "missing" : "ready"
 }
@@ -177,7 +173,6 @@ async function versionOf(path: string, env: Readonly<Record<string, string>>): P
 }
 
 function noteOf(agent: AgentConfig, status: AgentAvailability): string {
-  if (!agent.implemented) return "Codex 接入暂缓；即使安装了适配器也不会启动。"
   if (!agent.enabled) return "已在插件配置中禁用。"
   if (status === "missing") return `未找到 ${agent.command}，请安装对应 CLI 或修改 command。`
   return ""

@@ -20,7 +20,7 @@ export const PACKAGE = "aisdk:acp"
 export const DEFAULT_CONTEXT_LIMIT = 10_000_000
 
 /** How the agent was found at startup; drives provider visibility. */
-export type AgentAvailability = "ready" | "missing" | "disabled" | "deferred"
+export type AgentAvailability = "ready" | "missing" | "disabled"
 
 /** A registration whose hook can be removed when the plugin reloads. */
 export interface Disposable {
@@ -72,7 +72,7 @@ interface RegisterOptions {
  * Registers the provider, its models and the hooks that route requests to the
  * ACP client.
  *
- * A missing or deferred agent stays registered so the GUI and diagnostics can
+ * A missing agent stays registered so the GUI and diagnostics can
  * describe it, but its provider is disabled.
  */
 export async function registerAgent(
