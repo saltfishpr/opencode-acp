@@ -8,7 +8,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { Plugin } from "@opencode/plugin";
 import type { AcpTurnContext } from "../acp/client.js";
-import { logWarn } from "../log.js";
+import { logInfo, logWarn } from "../log.js";
 
 type Decision = "allow" | "always" | "reject";
 
@@ -65,6 +65,7 @@ export class PermissionBroker {
   /** Answers one ACP permission request and returns the option the agent should apply. */
   async request(params: RequestPermissionRequest, turn: AcpTurnContext): Promise<RequestPermissionResponse> {
     const target = targetOf(params.toolCall, turn.cwd);
+    logInfo("acp", `approval requested for ${target.action}: ${target.resources.join(", ")}`);
 
     try {
       await this.ensureAsk(turn.sessionID, target.action);
@@ -121,11 +122,13 @@ export class PermissionBroker {
       ]);
 
       if (first.kind === "aborted") {
+        logInfo("acp", "approval cancelled because the turn ended before a decision");
         this.cancelWaiter(waiter);
         return cancelled();
       }
 
       if (first.kind === "settled") {
+        logInfo("acp", `approval ${first.result.allowed ? "allowed" : "rejected"} without waiting for a card reply`);
         return first.result.allowed ? option(params, "allow") : option(params, "reject");
       }
 
@@ -218,6 +221,7 @@ export class PermissionBroker {
         }
 
         if (event.type === "permission.replied") {
+          logInfo("acp", `approval reply: ${event.data.reply}`);
           for (const [nonce, waiter] of this.waiters) {
             if (waiter.requestID !== event.data.requestID) continue;
             waiter.resolveReplied(event.data.reply);

@@ -170,7 +170,7 @@ export class ToolProjector {
       type: "tool-result" as const,
       toolCallId: item.id,
       toolName: item.name,
-      result: result.output,
+      result: result.result,
       isError: result.isError,
       providerMetadata: metadata,
     }));
@@ -296,35 +296,34 @@ function diffs(content: ToolCallContent[]): Array<{ path: string; oldText?: stri
   return content.flatMap((item) => (item.type === "diff" ? [item] : []));
 }
 
-function resultOf(state: CallState): { output: LanguageModelV3ToolResultOutput; isError: boolean } {
+function resultOf(state: CallState): { result: LanguageModelV3ToolResultOutput | string; isError: boolean } {
   const texts = state.content.flatMap((item) =>
     item.type === "content" && item.content.type === "text" ? [item.content.text] : [],
   );
   const terminals = state.content.flatMap((item) => (item.type === "terminal" ? [item.terminalId] : []));
   const changed = diffs(state.content).map((item) => item.path);
   const raw = asRecord(state.rawOutput);
-  const failed = state.status === "failed";
 
-  const lines = [...texts];
+  const lines = texts.filter((text) => text.trim().length > 0);
   if (terminals.length > 0) lines.push(terminals.map((id) => `terminal ${id}`).join("\n"));
   if (lines.length === 0 && changed.length > 0) lines.push(changed.map((path) => `Updated ${path}`).join("\n"));
-  if (lines.length === 0 && typeof raw?.["output"] === "string") lines.push(raw["output"]);
-
-  if (lines.length > 0) {
-    return { output: { type: failed ? "error-text" : "text", value: lines.join("\n\n") }, isError: failed };
+  if (lines.length === 0 && typeof raw?.["output"] === "string" && raw["output"].trim().length > 0) {
+    lines.push(raw["output"]);
   }
 
+  // OpenCode turns a failed provider-executed result into `error.message` by
+  // serializing it. A plain string stays readable; an output object shows up
+  // as raw JSON in the tool card.
+  if (state.status === "failed") {
+    return { result: lines.join("\n\n").trim() || "工具未执行：审批被拒绝或已取消。", isError: true };
+  }
+
+  if (lines.length > 0) return { result: { type: "text", value: lines.join("\n\n") }, isError: false };
   if (state.rawOutput !== undefined && state.rawOutput !== null) {
-    return {
-      output: { type: failed ? "error-json" : "json", value: state.rawOutput as JSONValue },
-      isError: failed,
-    };
+    return { result: { type: "json", value: state.rawOutput as JSONValue }, isError: false };
   }
 
-  return {
-    output: { type: failed ? "error-text" : "text", value: failed ? state.title : "completed" },
-    isError: failed,
-  };
+  return { result: { type: "text", value: "completed" }, isError: false };
 }
 
 function relative(cwd: string, path: string): string {
