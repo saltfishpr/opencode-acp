@@ -12,21 +12,25 @@ export function ImportSessionRow(props: {
   onImport(): void;
 }) {
   const ctx = usePlugin<typeof definition>();
+  const title = () => props.row.title || ctx.t("import.untitled");
   return (
     <button
       type="button"
       class="acp-import-session"
+      data-missing={!props.row.available || undefined}
       aria-busy={props.pending}
       disabled={props.disabled}
       onClick={() => props.onImport()}
     >
       <span class="acp-import-copy">
-        <span class="acp-import-title" dir="auto">
-          {props.row.title || ctx.t("import.untitled")}
+        <span class="acp-import-title" dir="auto" title={title()}>
+          {title()}
         </span>
-        <span class="acp-import-meta">
-          <span class="acp-import-agent">{props.agentName}</span>
-        </span>
+        <Show when={props.agentName}>
+          <span class="acp-import-meta">
+            <span class="acp-import-agent">{props.agentName}</span>
+          </span>
+        </Show>
       </span>
       <span class="acp-import-side">
         <Show

@@ -22,8 +22,10 @@ export function ImportSessions(props: { close(): void }) {
   const [scope, setScope] = createSignal<ImportScope>(ctx.sessions.current() === undefined ? "all" : "current");
   const [expanded, setExpanded] = createSignal<Record<string, boolean>>({});
   const [limits, setLimits] = createSignal<Record<string, number>>({});
+  const [order, setOrder] = createSignal<Record<string, number>>({});
   const [pending, setPending] = createSignal<string>();
   const [now, setNow] = createSignal(Date.now());
+  let list: { scrollTop: number } | undefined;
 
   const currentRoot = () => {
     const session = ctx.sessions.current();
@@ -41,7 +43,20 @@ export function ImportSessions(props: { close(): void }) {
   const nameOf = (serverID: string, agentID: string) => names().get(agentKey(serverID, agentID)) ?? agentID;
 
   const needle = () => query().trim().toLowerCase();
-  const groups = createMemo(() => groupSessions(rows(), currentRoot()));
+  const groups = createMemo(() => {
+    const sorted = groupSessions(rows(), currentRoot());
+    const rank = order();
+    if (Object.keys(rank).length === 0) return sorted;
+    // Keep groups seen before the first interaction in place; new groups append.
+    return [...sorted].sort((a, b) => {
+      const left = rank[a.key];
+      const right = rank[b.key];
+      if (left !== undefined && right !== undefined) return left - right;
+      if (left !== undefined) return -1;
+      if (right !== undefined) return 1;
+      return 0;
+    });
+  });
   const filtered = createMemo(() =>
     groups()
       .map((group) => ({
@@ -62,6 +77,8 @@ export function ImportSessions(props: { close(): void }) {
   const notes = createMemo(() => agents().filter((agent) => agent.status !== "ready"));
   const readingAgents = createMemo(() => agents().filter((agent) => reading()[agent.key] === true));
   const busy = () => loading() || readingAgents().length > 0;
+  const skeleton = () => loading() || (rows().length === 0 && readingAgents().length > 0);
+  const anyReady = () => agents().some((agent) => agent.status === "ready");
 
   const reasonText = (reason: string) => {
     const failures = new Set(["login", "exited", "timeout", "spawn", "discovery", "noModels"]);
@@ -102,7 +119,14 @@ export function ImportSessions(props: { close(): void }) {
     if (next === scope() || loading()) return;
     setScope(next);
     if (next === "current" && currentRoot() === undefined) return;
+    setOrder({});
+    if (list !== undefined) list.scrollTop = 0;
     void reload();
+  }
+
+  function freezeOrder() {
+    if (Object.keys(order()).length > 0) return;
+    setOrder(Object.fromEntries(groups().map((group, index) => [group.key, index])));
   }
 
   function toggle(group: ImportGroup) {
@@ -153,8 +177,9 @@ export function ImportSessions(props: { close(): void }) {
         </>
       }
     >
-      <div class="acp-import">
+      <div class="acp-import" onPointerDown={freezeOrder} onKeyDown={freezeOrder}>
         <ctx.ui.TextInput
+          class="acp-import-search"
           label={ctx.t("import.search")}
           placeholder={ctx.t("import.search")}
           value={query()}
@@ -188,9 +213,24 @@ export function ImportSessions(props: { close(): void }) {
             </span>
           )}
         </Show>
-        <div class="acp-import-list" data-scrollable>
+        <Show when={!loading() && notes().length > 0}>
+          <div class="acp-import-notes">
+            <For each={notes()}>
+              {(agent) => (
+                <p class="acp-import-note">
+                  {ctx.t("import.agentNote", {
+                    server: agent.server.name,
+                    agent: agent.name,
+                    reason: reasonText(agent.reason),
+                  })}
+                </p>
+              )}
+            </For>
+          </div>
+        </Show>
+        <div class="acp-import-list" data-scrollable ref={(element: { scrollTop: number }) => (list = element)}>
           <Show
-            when={!loading()}
+            when={!skeleton()}
             fallback={
               <div class="acp-import-skeleton" role="status" aria-label={ctx.t("import.loading")}>
                 <For each={[0, 1, 2, 3]}>
@@ -228,7 +268,9 @@ export function ImportSessions(props: { close(): void }) {
             <Show when={readingAgents().length > 0}>
               <div class="acp-import-reading" role="status">
                 <ctx.ui.Loader size="small" />
-                {ctx.t("import.reading", { agent: readingAgents()[0]!.name })}
+                {readingAgents().length === 1
+                  ? ctx.t("import.reading", { agent: readingAgents()[0]!.name })
+                  : ctx.plural("import.readingCount", readingAgents().length)}
               </div>
             </Show>
             <Show when={filtered().length === 0 && !busy() && needle().length > 0}>
@@ -243,27 +285,14 @@ export function ImportSessions(props: { close(): void }) {
             <Show when={filtered().length === 0 && !busy() && needle().length === 0}>
               <div class="acp-import-state" role="status">
                 <ctx.ui.Icon name="folder" size="large" />
-                <Show when={effectiveScope() === "current"} fallback={<span>{ctx.t("import.empty")}</span>}>
-                  <span>{ctx.t("import.emptyCurrent")}</span>
-                  <ctx.ui.Button variant="ghost-muted" onClick={() => changeScope("all")}>
-                    {ctx.t("import.showAll")}
-                  </ctx.ui.Button>
+                <Show when={anyReady()} fallback={<span>{ctx.t("import.emptyAgents")}</span>}>
+                  <Show when={effectiveScope() === "current"} fallback={<span>{ctx.t("import.empty")}</span>}>
+                    <span>{ctx.t("import.emptyCurrent")}</span>
+                    <ctx.ui.Button variant="ghost-muted" onClick={() => changeScope("all")}>
+                      {ctx.t("import.showAll")}
+                    </ctx.ui.Button>
+                  </Show>
                 </Show>
-              </div>
-            </Show>
-            <Show when={notes().length > 0}>
-              <div class="acp-import-notes">
-                <For each={notes()}>
-                  {(agent) => (
-                    <p class="acp-import-note">
-                      {ctx.t("import.agentNote", {
-                        server: agent.server.name,
-                        agent: agent.name,
-                        reason: reasonText(agent.reason),
-                      })}
-                    </p>
-                  )}
-                </For>
               </div>
             </Show>
           </Show>

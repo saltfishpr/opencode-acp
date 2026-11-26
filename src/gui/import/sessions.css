@@ -27,6 +27,11 @@
   flex-shrink: 0;
 }
 
+.acp-import-search {
+  width: 100%;
+  min-width: 0;
+}
+
 .acp-import-scopes {
   display: flex;
   flex-shrink: 0;
@@ -38,29 +43,29 @@
 .acp-scope {
   appearance: none;
   border: 0;
+  height: 28px;
+  padding: 0 8px;
   border-radius: 6px;
   background: transparent;
   color: var(--v2-text-text-muted);
   font: inherit;
-  font-size: 12px;
-  padding: 4px 8px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .acp-scope:hover:not(:disabled) {
-  background: var(--v2-overlay-simple-overlay-hover);
+  background: var(--v2-overlay-simple-overlay-pressed);
   color: var(--v2-text-text-base);
 }
 
 .acp-scope:focus-visible {
-  outline: none;
-  background: var(--v2-overlay-simple-overlay-hover);
+  outline: 1px solid var(--v2-text-text-muted);
+  outline-offset: -1px;
 }
 
 .acp-scope[aria-pressed="true"] {
   background: var(--v2-overlay-simple-overlay-pressed);
   color: var(--v2-text-text-base);
-  font-weight: 530;
 }
 
 .acp-scope:disabled {
@@ -99,12 +104,12 @@
 }
 
 .acp-import-project:hover {
-  background: var(--v2-overlay-simple-overlay-hover);
+  background: var(--v2-overlay-simple-overlay-pressed);
 }
 
 .acp-import-project:focus-visible {
-  outline: none;
-  background: var(--v2-overlay-simple-overlay-hover);
+  outline: 1px solid var(--v2-text-text-muted);
+  outline-offset: -1px;
 }
 
 .acp-import-project > [data-slot="icon-svg"] {
@@ -156,7 +161,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.acp-import-server {
+.acp-import-server,
+.acp-import-project-agent {
   max-width: 96px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -188,16 +194,19 @@
 }
 
 .acp-import-session:hover:not(:disabled) {
-  background: var(--v2-overlay-simple-overlay-hover);
+  background: var(--v2-overlay-simple-overlay-pressed);
 }
 
 .acp-import-session:focus-visible {
-  outline: none;
-  background: var(--v2-overlay-simple-overlay-hover);
+  outline: 1px solid var(--v2-text-text-muted);
+  outline-offset: -1px;
 }
 
 .acp-import-session:disabled {
   cursor: default;
+}
+
+.acp-import-session[data-missing] {
   opacity: 0.55;
 }
 
@@ -209,6 +218,13 @@
   color: var(--v2-text-text-muted);
   font-size: 12px;
   line-height: 16px;
+}
+
+.acp-import-agent {
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .acp-import-side {
@@ -243,8 +259,13 @@
 }
 
 .acp-import-more:hover {
-  background: var(--v2-overlay-simple-overlay-hover);
+  background: var(--v2-overlay-simple-overlay-pressed);
   color: var(--v2-text-text-base);
+}
+
+.acp-import-more:focus-visible {
+  outline: 1px solid var(--v2-text-text-muted);
+  outline-offset: -1px;
 }
 
 .acp-import-state {
@@ -272,7 +293,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-top: 8px;
+  padding-block: 4px 2px;
 }
 
 .acp-import-note {

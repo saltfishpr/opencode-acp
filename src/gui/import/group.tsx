@@ -19,7 +19,14 @@ export function ImportGroupSection(props: {
   onImport(row: ImportRowData): void;
 }) {
   const ctx = usePlugin<typeof definition>();
-  const total = () => props.group.rows.length;
+  // Matched rows, including the ones hidden behind "show more".
+  const total = () => props.rows.length + props.remaining;
+  const agentIDs = () => new Set(props.group.rows.map((row) => row.agentID));
+  const singleAgent = () => {
+    const ids = agentIDs();
+    return ids.size === 1 ? props.agentNameOf([...ids][0]!) : undefined;
+  };
+  const mixedAgents = () => agentIDs().size > 1;
 
   return (
     <section class="acp-import-group" aria-label={props.group.name}>
@@ -30,12 +37,15 @@ export function ImportGroupSection(props: {
           <span class="acp-import-project-name" dir="auto">
             {props.group.name}
           </span>
-          <span class="acp-import-directory" dir="auto">
+          <span class="acp-import-directory" dir="ltr" title={props.group.directory}>
             {props.group.directory}
           </span>
         </span>
         <span class="acp-import-project-meta">
           <Show when={props.serverName}>{(name: () => string) => <span class="acp-import-server">{name()}</span>}</Show>
+          <Show when={singleAgent()}>
+            {(name: () => string) => <span class="acp-import-project-agent">{name()}</span>}
+          </Show>
           <Show when={total()}>{(count: () => number) => <span class="acp-import-count">{count()}</span>}</Show>
         </span>
       </button>
@@ -45,7 +55,7 @@ export function ImportGroupSection(props: {
             {(row) => (
               <ImportSessionRow
                 row={row}
-                agentName={props.agentNameOf(row.agentID)}
+                agentName={mixedAgents() ? props.agentNameOf(row.agentID) : ""}
                 age={props.age(row.updatedAt)}
                 pending={props.pendingKey === row.key}
                 disabled={props.disabled || !row.available}
