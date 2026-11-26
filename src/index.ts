@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin"
 import { AgentRuntime } from "./acp/runtime.js"
-import { readConfig } from "./config.js"
+import { PLUGIN_ID, readConfig } from "./config.js"
 import { diagnosticsOf, findExecutable, statusOf } from "./diagnostics.js"
 import { PermissionBroker } from "./interaction/permission.js"
 import { setLogLevel, logInfo, logWarn } from "./log.js"
@@ -26,7 +26,7 @@ function installExitHook(): void {
  * Exposes external ACP agents as OpenCode providers.
  */
 export default Plugin.define({
-  id: "acp",
+  id: PLUGIN_ID,
   async setup(ctx) {
     const { agents, errors, logLevel, contextLimit } = readConfig(ctx.options)
     setLogLevel(logLevel)

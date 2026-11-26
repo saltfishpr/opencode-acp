@@ -1,5 +1,7 @@
 import type { LogLevel } from "./log.js"
 
+export const PLUGIN_ID = "opencode-acp"
+
 /**
  * One ACP agent this plugin exposes as an OpenCode provider.
  *

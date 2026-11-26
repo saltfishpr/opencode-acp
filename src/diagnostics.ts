@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { accessSync, constants } from "node:fs"
 import { delimiter, isAbsolute, resolve } from "node:path"
 import { promisify } from "node:util"
-import type { AgentConfig } from "./config.js"
+import { PLUGIN_ID, type AgentConfig } from "./config.js"
 import { describeExit } from "./acp/errors.js"
 import type { AgentRuntime } from "./acp/runtime.js"
 import { catalogOf } from "./provider/catalog.js"
@@ -108,7 +108,7 @@ export async function diagnosticsOf(input: DiagnosticsInput): Promise<Diagnostic
 
   return {
     plugin: {
-      id: "acp",
+      id: PLUGIN_ID,
       logLevel: input.logLevel,
       contextLimit: input.contextLimit ?? 0,
     },
