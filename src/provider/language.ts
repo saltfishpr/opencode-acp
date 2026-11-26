@@ -8,13 +8,14 @@ import type {
 } from "@ai-sdk/provider";
 import type { PromptResponse, SessionUpdate, StopReason } from "@agentclientprotocol/sdk";
 import { selectOption } from "../acp/catalog.js";
-import type { AcpClient, PermissionHandler } from "../acp/client.js";
+import type { AcpClient, ElicitationHandler, PermissionHandler } from "../acp/client.js";
 import { explain } from "../acp/errors.js";
 import type { AgentRuntime } from "../acp/runtime.js";
 import { EMPTY_USAGE, noteUsageUpdate, usageOf, type TurnUsage } from "../acp/usage.js";
 import { logInfo, logWarn } from "../log.js";
 import type { SessionBindings } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
+import { CardProjector } from "./cards.js";
 import { lastUserPrompt, type PromptContent } from "./content.js";
 import { saveAgentAudio, saveAgentImage } from "./media.js";
 import { ToolProjector } from "./projection.js";
@@ -38,6 +39,8 @@ export interface AcpModelDeps {
   /** ACP titles reported for each OpenCode session. */
   readonly titles: SessionTitles;
   readonly requestPermission: PermissionHandler;
+  /** Asks the user for structured input the agent needs before continuing. */
+  readonly requestElicitation: ElicitationHandler;
   /** Called when a new ACP title arrives, so a title hook that already ran can be corrected. */
   readonly onTitle?: (sessionID: string, title: string, previous: string | undefined) => void;
   /** Called when a turn reports a context window the model catalog did not know. */
@@ -158,6 +161,11 @@ async function* turn(
 
   if (warning !== undefined) yield* say(warning);
 
+  // A title reported between turns is stored on the client; apply it now so
+  // the previous turn's late title is not lost.
+  const storedTitle = client.title(acpSessionID);
+  if (storedTitle !== undefined) applyTitle(sessionID, storedTitle, deps);
+
   try {
     await applySelection(client, acpSessionID, selection);
   } catch (error) {
@@ -213,19 +221,20 @@ async function* turn(
   const running = client.prompt(
     acpSessionID,
     blocks,
-    { sessionID, cwd, requestPermission: deps.requestPermission },
+    { sessionID, cwd, requestPermission: deps.requestPermission, requestElicitation: deps.requestElicitation },
     options.abortSignal,
   );
   const tools = new ToolProjector({ cwd });
+  const cards = new CardProjector();
   const usage: TurnUsage = {};
   let response: PromptResponse = { stopReason: "cancelled" };
 
   try {
-    for await (const item of withHeartbeat(running.updates, running.waitingForPermission)) {
+    for await (const item of withHeartbeat(running.updates)) {
       if (item === HEARTBEAT) {
         // A no-op part gives OpenCode a chance to apply a user interrupt while
-        // the agent is blocked on an approval request.
-        yield { type: "raw", rawValue: { acp: "approval-wait" } };
+        // the agent is silent, including while it waits on a form or approval.
+        yield { type: "raw", rawValue: { acp: "heartbeat" } };
         continue;
       }
 
@@ -287,16 +296,26 @@ async function* turn(
         continue;
       }
 
-      if (update.sessionUpdate === "session_info_update") {
-        if (typeof update.title === "string") {
-          const title = update.title.trim();
-          const previous = deps.titles.get(sessionID);
-          if (deps.titles.remember(sessionID, title)) deps.onTitle?.(sessionID, title, previous);
-        }
+      if (update.sessionUpdate === "notice") {
+        yield* closeReasoning();
+        yield* closeText();
+        for (const part of cards.notice(update)) yield part;
         continue;
       }
 
-      // Plans, modes and commands are projected in later milestones.
+      if (update.sessionUpdate === "compaction_update" || update.sessionUpdate === "compaction_summary_chunk") {
+        yield* closeReasoning();
+        yield* closeText();
+        for (const part of cards.compaction(update)) yield part;
+        continue;
+      }
+
+      if (update.sessionUpdate === "session_info_update") {
+        if (typeof update.title === "string") applyTitle(sessionID, update.title, deps);
+        continue;
+      }
+
+      // Plans and commands are projected in later milestones.
     }
 
     if (running.error !== undefined) throw running.error;
@@ -304,6 +323,7 @@ async function* turn(
   } catch (error) {
     yield* closeReasoning();
     yield* closeText();
+    for (const part of cards.finish()) yield part;
     for (const part of tools.finish()) yield part;
     logWarn("acp", message(error));
     yield* say(`ACP 请求失败：${explain(error, client.failure)}`);
@@ -315,28 +335,26 @@ async function* turn(
 
   yield* closeReasoning();
   yield* closeText();
+  for (const part of cards.finish()) yield part;
   for (const part of tools.finish()) yield part;
   yield finish(stopReasonOf(response.stopReason), usageOf(response, usage));
 }
 
-/** Sentinel yielded while the agent is blocked on an approval request. */
+/** Sentinel yielded while the agent has not produced an update. */
 const HEARTBEAT = Symbol("heartbeat");
 
 /** How often to check whether OpenCode has an interrupt to apply. */
 const HEARTBEAT_MS = 400;
 
 /**
- * Wraps the update stream so a pending approval cannot block interruption.
+ * Wraps the update stream so a silent agent cannot block interruption.
  *
  * OpenCode applies a user interrupt when the provider yields another stream
- * part. Normal silent thinking keeps the M1 trade-off (wait for the next ACP
- * update), but an approval can wait indefinitely, so a heartbeat is emitted
- * for exactly that window.
+ * part, so a heartbeat is emitted whenever 400 ms pass without an update. The
+ * `raw` part is a no-op for rendering; if it turns out to be persisted into the
+ * transcript, raise the interval or emit only after a longer silence.
  */
-async function* withHeartbeat(
-  updates: AsyncIterable<SessionUpdate>,
-  waiting: () => boolean,
-): AsyncGenerator<SessionUpdate | typeof HEARTBEAT> {
+async function* withHeartbeat(updates: AsyncIterable<SessionUpdate>): AsyncGenerator<SessionUpdate | typeof HEARTBEAT> {
   const iterator = updates[Symbol.asyncIterator]();
   let pending = iterator.next();
 
@@ -345,7 +363,7 @@ async function* withHeartbeat(
       const next = await nextOrTimeout(pending, HEARTBEAT_MS);
 
       if (next === HEARTBEAT) {
-        if (waiting()) yield HEARTBEAT;
+        yield HEARTBEAT;
         continue;
       }
 
@@ -372,6 +390,15 @@ function nextOrTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof H
       },
     );
   });
+}
+
+/** Records a non-empty ACP title and tells the title hook when it replaced another. */
+function applyTitle(sessionID: string, title: string, deps: AcpModelDeps): void {
+  const value = title.trim();
+  if (value.length === 0) return;
+
+  const previous = deps.titles.get(sessionID);
+  if (deps.titles.remember(sessionID, value)) deps.onTitle?.(sessionID, value, previous);
 }
 
 /**

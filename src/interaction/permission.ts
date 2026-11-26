@@ -57,8 +57,21 @@ export class PermissionBroker {
   private readonly waiters = new Map<string, Waiter>();
   private readonly ensured = new Map<string, Set<string>>();
   private readonly stop = new AbortController();
+  private readonly hook: Promise<{ dispose(): Promise<void> } | undefined>;
 
   constructor(private readonly ctx: Plugin.Context) {
+    // Shows the ACP option list on the native approval card. The card still
+    // has three buttons; the message only explains what the agent asked for.
+    this.hook = ctx.permission
+      .hook("evaluate", (event) => {
+        const message = event.metadata?.["acpMessage"];
+        if (typeof message === "string" && message.length > 0) event.message = message;
+      })
+      .catch((error: unknown) => {
+        logWarn("acp", `could not register the permission message hook: ${message(error)}`);
+        return undefined;
+      });
+
     void this.watch();
   }
 
@@ -90,6 +103,7 @@ export class PermissionBroker {
 
     this.waiters.set(nonce, waiter);
 
+    const description = approvalMessage(params);
     const input = {
       sessionID: turn.sessionID,
       action: target.action,
@@ -97,8 +111,10 @@ export class PermissionBroker {
       save: target.save.length > 0 ? target.save : undefined,
       metadata: {
         acpRequest: nonce,
+        acpMessage: description.message,
         tool: params.toolCall.title ?? params.toolCall.toolCallId,
         kind: params.toolCall.kind ?? undefined,
+        input: { "ACP 选项": description.options },
       },
     };
 
@@ -166,6 +182,11 @@ export class PermissionBroker {
   /** Stops listening for permission events. */
   close(): void {
     this.stop.abort();
+    void this.hook
+      .then((registration) => registration?.dispose())
+      .catch((error: unknown) => {
+        logWarn("acp", `could not dispose the permission message hook: ${message(error)}`);
+      });
   }
 
   /**
@@ -286,6 +307,24 @@ export class PermissionBroker {
       // The request was already answered or the session went away.
     }
   }
+}
+
+/**
+ * Builds the text the native approval card shows, including every ACP option.
+ * The user still picks one of OpenCode's three buttons; the list explains what
+ * the agent's options mean.
+ */
+function approvalMessage(params: RequestPermissionRequest): { message: string; options: string } {
+  const title = (params.toolCall.title ?? "").trim() || params.toolCall.toolCallId;
+  const details = (params.toolCall.content ?? []).flatMap((item) =>
+    item.type === "content" && item.content.type === "text" ? [item.content.text.trim()] : [],
+  );
+  const options = params.options.map((item) => `${item.optionId}: ${item.name} (${item.kind})`);
+
+  return {
+    message: [title, ...details.filter((item) => item.length > 0), "", "ACP 选项：", ...options].join("\n"),
+    options: options.join("\n"),
+  };
 }
 
 /** Maps one ACP tool call to the action and resources shown in the native card. */

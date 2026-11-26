@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin";
 import { statSync } from "node:fs";
 import { AcpStartError } from "./acp/errors.js";
 import { AcpClient } from "./acp/client.js";
-import { selectOption, type Catalog } from "./acp/catalog.js";
+import { selectOption, valuesOf, type Catalog } from "./acp/catalog.js";
 import { AgentRuntime, findExecutable, type AgentState } from "./acp/runtime.js";
 import {
   EMPTY_CONFIG,
@@ -15,6 +15,7 @@ import {
   type Config,
 } from "./config.js";
 import { PermissionBroker } from "./interaction/permission.js";
+import { ElicitationBroker } from "./interaction/elicitation.js";
 import { logError, logInfo, logWarn, setLogLevel, type LogLevel } from "./log.js";
 import { clearCatalog, loadCatalog, saveCatalog } from "./provider/catalog.js";
 import { PACKAGE, registerProviders } from "./provider/register.js";
@@ -32,9 +33,11 @@ import {
   type ImportStatus,
   type MutationResult,
   type PrepareImportResult,
+  type SessionOptionView,
+  type SessionOptionsView,
   type SettingsView,
 } from "./rpc.js";
-import { SessionBindings, type SessionBindingEntry } from "./session/binding.js";
+import { SessionBindings, type AcpBinding, type SessionBindingEntry } from "./session/binding.js";
 import { buildImportPayload, type HistoryModel, type ImportPayload } from "./session/history.js";
 import { SessionTitles } from "./session/title.js";
 
@@ -71,11 +74,13 @@ export default Plugin.define({
     const titles = state.titles;
     const bindings = new SessionBindings(ctx.storage);
     const permissions = new PermissionBroker(ctx);
+    const elicitations = new ElicitationBroker();
     const { registrations, occupied } = await registerProviders(ctx, {
       agents: running,
       bindings,
       titles,
       requestPermission: (params, turn) => permissions.request(params, turn),
+      requestElicitation: (params, turn) => elicitations.request(params, turn),
       onContextWindow(runtime, size) {
         if (contextWindows.get(runtime) === size) return;
         contextWindows.set(runtime, size);
@@ -200,9 +205,56 @@ export default Plugin.define({
       abortImport(input) {
         return abortImport(ctx, bindings, input as AbortImportInput);
       },
+      sessionOptions(input) {
+        return readSessionOptions(ctx, bindings, (input as { sessionID: string }).sessionID);
+      },
+      setSessionOption(input) {
+        const { sessionID, configID, value } = input as {
+          sessionID: string;
+          configID: string;
+          value: string | boolean;
+        };
+        return applySessionOption(ctx, bindings, sessionID, configID, value);
+      },
+      claimElicitation(input) {
+        return Promise.resolve({ claimed: elicitations.claim((input as { requestID: string }).requestID) });
+      },
+      answerElicitation(input) {
+        const { requestID, action, content } = input as {
+          requestID: string;
+          action: "accept" | "cancel" | "decline";
+          content?: Record<string, unknown>;
+        };
+        const answered = elicitations.answer(requestID, action, content);
+        return Promise.resolve<MutationResult>({ status: answered ? "ok" : "notFound" });
+      },
+      elicitationForm(input) {
+        const { requestID, formID } = input as { requestID: string; formID: string };
+        return Promise.resolve<MutationResult>({
+          status: elicitations.form(requestID, formID) ? "ok" : "notFound",
+        });
+      },
+      pendingElicitations() {
+        return Promise.resolve({ requests: elicitations.pendingRequests() });
+      },
+    });
+
+    elicitations.attach({
+      request(view) {
+        void rpc.events
+          .emit("elicitation", view as unknown as Record<string, unknown>)
+          .catch((error: unknown) => logWarn("acp", `could not publish an elicitation: ${message(error)}`));
+      },
+      cancelled(requestID) {
+        return rpc.events
+          .emit("elicitationCancelled", { requestID })
+          .catch((error: unknown) => logWarn("acp", `could not cancel an elicitation: ${message(error)}`));
+      },
     });
 
     return async () => {
+      // Let GUI windows cancel their forms before the RPC channel goes away.
+      await elicitations.close();
       await rpc.dispose();
       await enqueue(async () => {
         locations.delete(ctx);
@@ -579,6 +631,162 @@ function chooseModel(
       : undefined;
 
   return { providerID: agentID, id: model.id, ...(variant === undefined ? {} : { variant }) };
+}
+
+interface ResolvedSession {
+  readonly client: AcpClient;
+  readonly sessionId: string;
+}
+
+type SessionResolution = ResolvedSession | { readonly status: "notAcp" | "unbound" | "unavailable" };
+
+/**
+ * Finds the ACP agent, client and ACP session behind an OpenCode session.
+ * Reloads the ACP session when the process no longer has it.
+ */
+async function resolveAcpSession(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  sessionID: string,
+): Promise<SessionResolution> {
+  let providerID: string | undefined;
+  try {
+    const session = await ctx.session.get({ sessionID });
+    providerID = session.model?.providerID;
+  } catch {
+    return { status: "unavailable" };
+  }
+
+  const agent = providerID === undefined ? undefined : state.config.agents.find((item) => item.id === providerID);
+  if (agent === undefined) return { status: "notAcp" };
+
+  const active = running.get(agent.id);
+  if (active === undefined || !active.runtime.status.running || active.status === "failed") {
+    return { status: "unavailable" };
+  }
+
+  let binding: AcpBinding | undefined;
+  try {
+    binding = await bindings.get(agent.id, sessionID);
+  } catch (error) {
+    logWarn("acp", `could not read the binding for ${sessionID}: ${message(error)}`);
+    return { status: "unavailable" };
+  }
+  if (binding === undefined) return { status: "unbound" };
+
+  let client: AcpClient;
+  try {
+    client = await active.runtime.ensureClient();
+  } catch (error) {
+    logWarn("acp", `could not start ${agent.id} for session settings: ${message(error)}`);
+    return { status: "unavailable" };
+  }
+
+  if (!client.hasSession(binding.sessionId)) {
+    if (!client.canLoadSession) return { status: "unavailable" };
+    try {
+      await client.loadSession(binding.sessionId, binding.cwd);
+    } catch (error) {
+      logWarn("acp", `could not load ${binding.sessionId} for session settings: ${message(error)}`);
+      return { status: "unavailable" };
+    }
+  }
+
+  return { client, sessionId: binding.sessionId };
+}
+
+async function readSessionOptions(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  sessionID: string,
+): Promise<SessionOptionsView> {
+  const resolved = await resolveAcpSession(ctx, bindings, sessionID);
+  if ("status" in resolved) return { status: resolved.status, options: [] };
+  return { status: "ok", options: sessionOptionViews(resolved.client, resolved.sessionId) };
+}
+
+/** Combines config options with the legacy mode state into one list. */
+function sessionOptionViews(client: AcpClient, sessionId: string): SessionOptionView[] {
+  const options = client.configOptions(sessionId);
+  // The model picker owns model and thinking level: the next turn's
+  // `applySelection` would overwrite any change made here.
+  const visible = options.filter((option) => !isModelOption(option));
+
+  const views: SessionOptionView[] = visible.map((option) => {
+    const base = {
+      id: option.id,
+      name: option.name,
+      ...(option.description == null ? {} : { description: option.description }),
+      ...(option.category == null ? {} : { category: option.category }),
+    };
+
+    if (option.type === "boolean") return { ...base, type: "boolean", current: option.currentValue };
+
+    return {
+      ...base,
+      type: "select",
+      current: option.currentValue,
+      values: valuesOf(option).map((value) => ({
+        value: value.value,
+        name: value.name,
+        ...(value.description == null ? {} : { description: value.description }),
+      })),
+    };
+  });
+
+  const hasMode = selectOption(options, "mode") !== undefined;
+  const modes = client.modes(sessionId);
+  if (!hasMode && modes !== undefined) {
+    views.unshift({
+      id: "__mode",
+      name: "Mode",
+      category: "mode",
+      type: "select",
+      current: modes.currentModeId,
+      values: modes.availableModes.map((mode) => ({
+        value: mode.id,
+        name: mode.name,
+        ...(mode.description == null ? {} : { description: mode.description }),
+      })),
+    });
+  }
+
+  return views;
+}
+
+/** Model and thinking level belong to the model picker, not the session settings. */
+function isModelOption(option: SessionConfigOption): boolean {
+  return [option.id, option.category ?? ""].some((value) => value === "model" || value === "thought_level");
+}
+
+async function applySessionOption(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  sessionID: string,
+  configID: string,
+  value: string | boolean,
+): Promise<MutationResult> {
+  const resolved = await resolveAcpSession(ctx, bindings, sessionID);
+  if ("status" in resolved) return { status: "notFound" };
+
+  try {
+    if (configID === "__mode") {
+      if (typeof value !== "string") return { status: "invalid" };
+      await resolved.client.setMode(resolved.sessionId, value);
+      return { status: "ok" };
+    }
+
+    const option = resolved.client.configOptions(resolved.sessionId).find((item) => item.id === configID);
+    if (option === undefined) return { status: "notFound" };
+    if (option.type === "boolean" && typeof value !== "boolean") return { status: "invalid" };
+    if (option.type === "select" && typeof value !== "string") return { status: "invalid" };
+
+    await resolved.client.setConfigOption(resolved.sessionId, configID, value);
+    return { status: "ok" };
+  } catch (error) {
+    logWarn("acp", `could not set ${configID} on ${resolved.sessionId}: ${message(error)}`);
+    return { status: "saveFailed" };
+  }
 }
 
 function newSessionID(): string {

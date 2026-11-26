@@ -23,6 +23,7 @@ import { definition } from "../definition.js";
 import { ServerSwitcher } from "../shared/server-switcher.js";
 import { AgentForm } from "./agent-form.js";
 import { AgentRow } from "./agent-row.js";
+import { SessionOptions } from "./session-options.js";
 
 type Connection = { id: string; client: ServerRef["client"] };
 type LoadError = "unavailable" | "updatePlugin" | "loadFailed";
@@ -273,6 +274,7 @@ export function Settings() {
           )}
         </Show>
       </section>
+      <SessionOptions />
       <Show when={settings()}>
         {(current: () => SettingsView) => (
           <ctx.ui.SettingsSection>

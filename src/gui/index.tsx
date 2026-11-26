@@ -1,6 +1,7 @@
 import { Command, Plugin, SettingsPage, Style } from "@opencode/plugin/gui";
 import css from "../gui.css?inline";
 import { definition } from "./definition.js";
+import { startElicitationBridge } from "./elicitation/bridge.js";
 import { ImportSessions } from "./import/index.js";
 import sessionsCss from "./import/sessions.css?inline";
 import { Settings } from "./settings/index.js";
@@ -8,6 +9,7 @@ import { Settings } from "./settings/index.js";
 export default Plugin.define({
   ...definition,
   setup(ctx) {
+    const stopElicitations = startElicitationBridge(ctx);
     ctx.add(Style, `${css}\n${sessionsCss}`);
     ctx.add(Command, () => ({
       id: "import-session",
@@ -35,5 +37,7 @@ export default Plugin.define({
       },
       render: () => <Settings />,
     });
+
+    return stopElicitations;
   },
 });

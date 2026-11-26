@@ -16,6 +16,9 @@ flowchart LR
 - 每个模型带 thinking level 二级选择（如 Low / Medium / High / Extra），与 agent 的 `thought_level` 一一对应。
 - 正文和思考按流式输出。
 - 远端工具调用显示为 OpenCode 原生卡片：`bash`、`read` / `list`、`grep` / `glob`、`edit` / `write`（带 diff）、`webfetch`，其他工具使用 `acp_<name>` 通用卡。OpenCode 只渲染这些卡片，不会重复执行命令或修改文件。
+- `notice` 显示为 `acp_notice` 卡片；`compaction_update` / `compaction_summary_chunk` 显示为 `acp_compaction` 卡片，并在结束时给出状态和摘要。
+- Settings › ACP 的「当前会话」区块可以查看和切换 agent 报告的 mode、model_config、boolean 及其他 config option；模型和 thinking level 仍由模型选择器管理。
+- Desktop 中 agent 发起的 `elicitation/create` 会创建 OpenCode 原生表单，用户填写后把结果回传给 agent；没有 Desktop 窗口时请求会被拒绝。
 - 最新用户消息中的图片和音频会转成 ACP `image` / `audio` block 转发；agent 未声明对应能力时忽略并提示。
 - agent 回复中的图片和音频会保存到服务器临时目录，并在正文中给出路径。
 - 全局命令面板提供「导入 ACP 会话」，可以列出 ACP agent 中已有但未绑定到 OpenCode 的会话，并把历史导入为新的 OpenCode 会话。
@@ -56,7 +59,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 1. 在模型选择器中选择一个模型，需要时在旁边的二级菜单中选择 thinking level。
 2. 正常发送消息。只有最新一条用户消息的文本、图片和音频会转发给 agent；OpenCode 的系统提示、历史消息、工具记录和其他附件不会发送。agent 未声明 `promptCapabilities.image` / `promptCapabilities.audio` 时，对应内容会被忽略并在回复中说明。
 3. agent 自己决定调用哪些工具。工具卡和 diff 由 OpenCode 渲染，实际命令和文件操作在 agent 进程中执行。
-4. 需要审批时会出现原生权限卡：
+4. 需要审批时会出现原生权限卡。卡片正文会列出 agent 提供的 ACP 选项，但按钮仍然是 OpenCode 的三选一：
    - **允许一次**：只放行当前请求。
    - **始终允许**：放行当前请求，并把请求中的命令、路径或 URL 保存为项目级规则；之后完全相同的请求不再弹卡。包含 `*` 或 `?` 的资源不会写入规则。
    - **拒绝**：结束当前 step，工具显示为已停止，整轮对话显示为已中断。
@@ -103,6 +106,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 2. 点击「添加 Agent」。选 Antigravity 会预填 `agy acp`；选「自定义」则填显示名称、Provider ID 和可执行文件。启动参数逐项填写，需要代理时在环境变量中添加 `HTTPS_PROXY` 或 `HTTP_PROXY`。
 3. 点击「保存并启用」。模型发现成功后，可以在所选服务器的模型选择器中使用该 agent。启动失败时可在对应行查看原因，并从「⋯」菜单重试。
 4. 从「⋯」菜单编辑、启用、停用或移除 agent。停用会保留配置；移除会删除配置，已有对话记录会保留。
+5. 页面下方的「当前会话」区块直接读取当前打开会话的 ACP 状态：可以切换 mode、model_config、agent 报告的 boolean config option 及其他 config option；模型和 thinking level 由模型选择器管理，这里不重复提供。非 ACP 会话、尚未建立 ACP 对话或 agent 不可用时，会显示对应原因。
 
 「日志级别」下拉框对所选服务器立即生效，默认 `info`。首次打开时没有已配置的 agent；旧文件中的插件 `options` 不再生效。只在由自己或信任的管理员控制的服务器上启用此插件，添加的可执行文件会以 OpenCode server 的账号运行。
 
@@ -117,7 +121,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 - 导入时用户附件会经过 server RPC 和 session import 两次传输，单次导入的附件总预算有限。
 - 只针对 Desktop 验证；TUI 未适配。
 - OpenCode 的 revert / snapshot 对远端 agent 的改动无效，需要撤销时使用 git。
-- 插件 API 不提供表单，`elicitation/create` 会被统一拒绝，并在助手正文中说明。
+- 插件 API 不提供表单：`elicitation/create` 只在 Desktop 中由插件窗口创建原生表单；TUI、web 或没有打开 Desktop 窗口时会返回 `decline`，agent 需要自行处理。
 - OpenCode 自己的 agent、skill、MCP 和指令不会作用于远端 agent。
 
 ## 故障排查

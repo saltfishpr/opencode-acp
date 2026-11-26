@@ -100,6 +100,55 @@ export interface AbortImportInput {
   readonly opencodeSessionID: string;
 }
 
+const SESSION_OPTION_STATUS = ["ok", "notAcp", "unbound", "unavailable", "invalid"] as const;
+export type SessionOptionStatus = (typeof SESSION_OPTION_STATUS)[number];
+
+export interface SessionOptionValueView {
+  readonly value: string;
+  readonly name: string;
+  readonly description?: string;
+}
+
+export interface SessionOptionView {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly category?: string;
+  readonly type: "select" | "boolean";
+  readonly current: string | boolean;
+  readonly values?: readonly SessionOptionValueView[];
+}
+
+export interface SessionOptionsView {
+  readonly status: SessionOptionStatus;
+  readonly options: readonly SessionOptionView[];
+}
+
+export interface SessionOptionsInput {
+  readonly sessionID: string;
+}
+
+export interface SetSessionOptionInput {
+  readonly sessionID: string;
+  readonly configID: string;
+  readonly value: string | boolean;
+}
+
+export interface ClaimElicitationInput {
+  readonly requestID: string;
+}
+
+export interface AnswerElicitationInput {
+  readonly requestID: string;
+  readonly action: "accept" | "cancel" | "decline";
+  readonly content?: Record<string, unknown>;
+}
+
+export interface ElicitationFormInput {
+  readonly requestID: string;
+  readonly formID: string;
+}
+
 const RESULTS = ["ok", "conflict", "busy", "invalid", "duplicate", "notFound", "saveFailed"] as const;
 export type MutationResult = { readonly status: (typeof RESULTS)[number]; readonly field?: string };
 
@@ -188,9 +237,92 @@ const abortImportInput = {
   additionalProperties: false,
 } as const;
 
+const sessionOptionValue = {
+  type: "object",
+  properties: { value: text, name: text, description: text },
+  required: ["value", "name"],
+  additionalProperties: false,
+} as const;
+
+const sessionOption = {
+  type: "object",
+  properties: {
+    id: text,
+    name: text,
+    description: text,
+    category: text,
+    type: { enum: ["select", "boolean"] },
+    current: { type: ["string", "boolean"] },
+    values: { type: "array", items: sessionOptionValue },
+  },
+  required: ["id", "name", "type", "current"],
+  additionalProperties: false,
+} as const;
+
+const sessionOptionsOutput = {
+  type: "object",
+  properties: {
+    status: { enum: SESSION_OPTION_STATUS },
+    options: { type: "array", items: sessionOption },
+  },
+  required: ["status", "options"],
+  additionalProperties: false,
+} as const;
+
+const setSessionOptionInput = {
+  type: "object",
+  properties: { sessionID: text, configID: text, value: { type: ["string", "boolean"] } },
+  required: ["sessionID", "configID", "value"],
+  additionalProperties: false,
+} as const;
+
+const elicitationRequest = {
+  type: "object",
+  properties: {
+    requestID: text,
+    sessionID: text,
+    directory: text,
+    agentName: text,
+    title: text,
+    message: text,
+    fields: { type: "array", items: { type: "object", additionalProperties: true } },
+    toolCallID: text,
+  },
+  required: ["requestID", "sessionID", "directory", "agentName", "title", "fields"],
+  additionalProperties: false,
+} as const;
+
+const elicitationRequestID = {
+  type: "object",
+  properties: { requestID: text },
+  required: ["requestID"],
+  additionalProperties: false,
+} as const;
+
+const answerElicitationInput = {
+  type: "object",
+  properties: {
+    requestID: text,
+    action: { enum: ["accept", "cancel", "decline"] },
+    content: { type: "object", additionalProperties: true },
+  },
+  required: ["requestID", "action"],
+  additionalProperties: false,
+} as const;
+
+const elicitationFormInput = {
+  type: "object",
+  properties: { requestID: text, formID: text },
+  required: ["requestID", "formID"],
+  additionalProperties: false,
+} as const;
+
 export const AcpSettings = Rpc.define({
   id: "acp",
-  events: {},
+  events: {
+    elicitation: { schema: elicitationRequest },
+    elicitationCancelled: { schema: elicitationRequestID },
+  },
   methods: {
     settings: {
       input: { type: "object", properties: {}, additionalProperties: false },
@@ -300,6 +432,45 @@ export const AcpSettings = Rpc.define({
     abortImport: {
       input: abortImportInput,
       output: result,
+    },
+    sessionOptions: {
+      input: {
+        type: "object",
+        properties: { sessionID: text },
+        required: ["sessionID"],
+        additionalProperties: false,
+      },
+      output: sessionOptionsOutput,
+    },
+    setSessionOption: {
+      input: setSessionOptionInput,
+      output: result,
+    },
+    claimElicitation: {
+      input: elicitationRequestID,
+      output: {
+        type: "object",
+        properties: { claimed: { type: "boolean" } },
+        required: ["claimed"],
+        additionalProperties: false,
+      },
+    },
+    answerElicitation: {
+      input: answerElicitationInput,
+      output: result,
+    },
+    elicitationForm: {
+      input: elicitationFormInput,
+      output: result,
+    },
+    pendingElicitations: {
+      input: { type: "object", properties: {}, additionalProperties: false },
+      output: {
+        type: "object",
+        properties: { requests: { type: "array", items: elicitationRequest } },
+        required: ["requests"],
+        additionalProperties: false,
+      },
     },
   },
 });

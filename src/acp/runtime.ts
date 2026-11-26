@@ -104,6 +104,7 @@ export class AgentRuntime {
       args: this.agent.args,
       env: this.agent.env,
       name: this.agent.id,
+      displayName: this.agent.name,
     }).finally(() => {
       this.starting = undefined;
     });

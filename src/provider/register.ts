@@ -1,5 +1,6 @@
 import { Model, Plugin, Provider } from "@opencode/plugin";
-import type { PermissionHandler } from "../acp/client.js";
+import type { ElicitationHandler, PermissionHandler } from "../acp/client.js";
+
 import type { AgentRuntime, AgentState } from "../acp/runtime.js";
 import { logWarn } from "../log.js";
 import { SessionBindings, sessionDirectory } from "../session/binding.js";
@@ -17,6 +18,7 @@ interface RegisterOptions {
   readonly bindings: SessionBindings;
   readonly titles: SessionTitles;
   readonly requestPermission: PermissionHandler;
+  readonly requestElicitation: ElicitationHandler;
   readonly onContextWindow: (runtime: AgentRuntime, size: number) => void;
 }
 
@@ -44,6 +46,7 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
         directory: (sessionID) => sessionDirectory(ctx, sessionID),
         titles: options.titles,
         requestPermission: options.requestPermission,
+        requestElicitation: options.requestElicitation,
         onTitle: (sessionID, title, previous) => {
           void applyAcpTitle(ctx, sessionID, title, firstPrompts.get(sessionID), previous);
         },
