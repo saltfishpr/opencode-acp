@@ -86,9 +86,16 @@ export class PromptFiles {
     const entry = this.latest.get(sessionID);
     if (entry === undefined) return undefined;
 
-    // The prompt hook and the model request may differ only in whitespace.
-    const value = text.trim();
-    if (entry.text === value || normalize(entry.text) === normalize(value)) return entry.files;
+    const value = normalize(text);
+    const prompt = normalize(entry.text);
+    if (value === prompt) return entry.files;
+
+    // OpenCode appends each attachment after the prompt text as an
+    // "Attached file: …" section, so the model request is longer than the
+    // prompt the hook recorded. Compare the prompt as a prefix instead of
+    // requiring equality.
+    if (prompt.length === 0) return value.startsWith("Attached file:") ? entry.files : undefined;
+    if (value.startsWith(`${prompt} `)) return entry.files;
     return undefined;
   }
 
