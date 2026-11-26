@@ -17,13 +17,15 @@ flowchart LR
 - 正文和思考按流式输出。
 - 远端工具调用显示为 OpenCode 原生卡片：`bash`、`read` / `list`、`grep` / `glob`、`edit` / `write`（带 diff）、`webfetch`，其他工具使用 `acp_<name>` 通用卡。OpenCode 只渲染这些卡片，不会重复执行命令或修改文件。
 - `notice` 显示为 `acp_notice` 卡片；`compaction_update` / `compaction_summary_chunk` 显示为 `acp_compaction` 卡片，并在结束时给出状态和摘要。
-- Settings › ACP 的「当前会话」区块可以查看和切换 agent 报告的 mode、model_config、boolean 及其他 config option；模型和 thinking level 仍由模型选择器管理。
+- `plan` / `plan_update` / `plan_removed` 在每轮结束时投影为 `acp_plan` 卡片；一份计划一张卡，卡片内容是该轮结束时最新的 checklist 或 markdown 计划。
+- Settings › ACP 的「当前会话」区块可以查看和切换 agent 报告的 mode、model_config、boolean 及其他 config option；模型和 thinking level 仍由模型选择器管理。agent 报告的 slash commands 也会列在这里，但只读。
+- 与 OpenCode 内置命令重名时，用 `/acp <command> [args]` 把命令转发给当前 ACP agent；其他未知 slash 命令仍由 OpenCode 作为普通消息透传。
 - Desktop 中 agent 发起的 `elicitation/create` 会创建 OpenCode 原生表单，用户填写后把结果回传给 agent；没有 Desktop 窗口时请求会被拒绝。
-- 最新用户消息中的图片和音频会转成 ACP `image` / `audio` block 转发；agent 未声明对应能力时忽略并提示。
+- 最新用户消息中的图片和音频会转成 ACP `image` / `audio` block 转发；agent 未声明对应能力时忽略并提示。其他附件会转成 `resource_link`，agent 声明 `promptCapabilities.embeddedContext` 时，文本文件会内联为 `resource`。
 - agent 回复中的图片和音频会保存到服务器临时目录，并在正文中给出路径。
-- 全局命令面板提供「导入 ACP 会话」，可以列出 ACP agent 中已有但未绑定到 OpenCode 的会话，并把历史导入为新的 OpenCode 会话。
+- 全局命令面板提供「导入 ACP 会话」，可以列出 ACP agent 中已有但未绑定到 OpenCode 的会话，并把历史导入为新的 OpenCode 会话；也可以从列表中删除 agent 侧的会话。
 - 审批使用原生权限卡片，可以允许一次、始终允许或拒绝。
-- 会话映射保存在插件 storage 中。OpenCode server 重启后，下一轮通过 `session/load` 恢复远端上下文。
+- 会话映射保存在插件 storage 中。OpenCode server 重启后，下一轮优先通过 `session/resume` 恢复远端上下文，不支持时回退到 `session/load`。
 - ACP 会话标题会成为 OpenCode 标题；token 统计包含 cache 和 reasoning；上下文窗口从 agent 的 `usage_update` 学习。
 - 桌面端设置页按服务器管理 ACP agent，显示启用状态和模型发现结果，并可调整日志级别。
 
@@ -57,7 +59,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 ## 使用
 
 1. 在模型选择器中选择一个模型，需要时在旁边的二级菜单中选择 thinking level。
-2. 正常发送消息。只有最新一条用户消息的文本、图片和音频会转发给 agent；OpenCode 的系统提示、历史消息、工具记录和其他附件不会发送。agent 未声明 `promptCapabilities.image` / `promptCapabilities.audio` 时，对应内容会被忽略并在回复中说明。
+2. 正常发送消息。只有最新一条用户消息的文本、图片、音频和附件会转发给 agent；OpenCode 的系统提示、历史消息、工具记录不会发送。agent 未声明 `promptCapabilities.image` / `promptCapabilities.audio` 时，对应内容会被忽略并在回复中说明。其他附件以 `resource_link` 转发；agent 声明 `promptCapabilities.embeddedContext` 且文件是 1 MB 以内的文本时，会内联为 `resource`。
 3. agent 自己决定调用哪些工具。工具卡和 diff 由 OpenCode 渲染，实际命令和文件操作在 agent 进程中执行。
 4. 需要审批时会出现原生权限卡。卡片正文会列出 agent 提供的 ACP 选项，但按钮仍然是 OpenCode 的三选一：
    - **允许一次**：只放行当前请求。
@@ -67,6 +69,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
    审批卡没有单独的“取消”按钮。从外部中断整个会话时，挂起的 ACP 请求会被回复为 `cancelled`，对话正常结束。
 
 5. 点击停止会向 agent 发送 `session/cancel`，并结束当前流。
+6. agent 报告的 slash command 可以直接输入，例如 `/web`。如果命令和 OpenCode 内置命令重名（如 `/compact`），用 `/acp compact` 转发；`/acp` 只在当前会话使用 ACP 模型时生效。
 
 ### 模型与 thinking level
 
@@ -79,7 +82,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 ### 会话与标题
 
 - 一个 agent 只启动一个进程，被所有使用它的 OpenCode 会话共享；插件卸载或 server 退出时结束。agent 运行在独立进程组中，关闭时会一并结束它 fork 的子进程。
-- OpenCode 会话与 ACP 会话的映射保存在插件 storage。server 重启后，下一轮会调用 `session/load`；加载失败时会新建 ACP 会话，并在回复中说明上下文未恢复。
+- OpenCode 会话与 ACP 会话的映射保存在插件 storage。server 重启后，下一轮优先调用 `session/resume`，agent 不支持时回退到 `session/load`；两者都失败时会新建 ACP 会话，并在回复中说明上下文未恢复。
 - agent 通过 `session_info_update` 报告的标题优先。如果 OpenCode 已经用首条消息生成了标题，ACP 标题到达后会替换它，除非用户手动重命名过会话。
 
 ### 导入已有 ACP 会话
@@ -88,9 +91,10 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 2. 弹窗先读取所有已连接服务器上的 agent 状态，再并发读取每个运行中 agent 的会话。结果按「服务器 + 目录」分组，当前项目目录排在最前并默认展开，其余分组折叠；每组先显示 8 条，可继续展开。
 3. 默认只显示当前目录（精确路径及当前项目 worktree 下）的会话，可切换到「全部目录」。已绑定且 OpenCode 会话仍存在的会话隐藏；如果对应的 OpenCode 会话已删除，绑定会视为陈旧并重新出现在列表里。
 4. 列表不会启动未运行的 agent：进程已退出或已停用的 agent 只在底部显示原因。刷新只重新读取已经列出会话的 agent。
-5. 选择会话后，插件会调用 `session/load` 读取 agent 侧历史，把用户消息、助手文本、思考、工具卡片、通知和压缩摘要转换成 OpenCode 会话内容，然后创建新会话并打开标签页。
+5. 选择会话后，插件会调用 `session/load` 读取 agent 侧历史，把用户消息、助手文本、思考、工具卡片、通知、计划（渲染为 checklist 或 markdown）和压缩摘要转换成 OpenCode 会话内容，然后创建新会话并打开标签页。
 6. 用户消息里的图片/音频会作为 OpenCode 原生附件导入；agent 和工具产生的图片/音频会按当前实时规则保存到服务器临时目录，并在正文中给出路径。
 7. 导入后模型优先使用 ACP 会话当前模型和 thinking level；找不到时回退到该 agent 的默认模型。下一轮对话通过已有绑定继续使用同一个 ACP 会话，远端上下文不会丢失。
+8. 行尾的删除按钮会先确认，再从 agent 侧删除该会话。仍绑定到存在的 OpenCode 会话的 ACP 会话不会出现在列表里，也不会被删除；删除只对声明了 `sessionCapabilities.delete` 的 agent 可用。
 
 导入依赖 OpenCode 的实验性 session import 接口；服务器版本不支持时会在弹窗中提示。
 
@@ -106,19 +110,22 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 2. 点击「添加 Agent」。选 Antigravity 会预填 `agy acp`；选「自定义」则填显示名称、Provider ID 和可执行文件。启动参数逐项填写，需要代理时在环境变量中添加 `HTTPS_PROXY` 或 `HTTP_PROXY`。
 3. 点击「保存并启用」。模型发现成功后，可以在所选服务器的模型选择器中使用该 agent。启动失败时可在对应行查看原因，并从「⋯」菜单重试。
 4. 从「⋯」菜单编辑、启用、停用或移除 agent。停用会保留配置；移除会删除配置，已有对话记录会保留。
-5. 页面下方的「当前会话」区块直接读取当前打开会话的 ACP 状态：可以切换 mode、model_config、agent 报告的 boolean config option 及其他 config option；模型和 thinking level 由模型选择器管理，这里不重复提供。非 ACP 会话、尚未建立 ACP 对话或 agent 不可用时，会显示对应原因。
+5. 页面下方的「当前会话」区块直接读取当前打开会话的 ACP 状态：可以切换 mode、model_config、agent 报告的 boolean config option 及其他 config option；模型和 thinking level 由模型选择器管理，这里不重复提供。区块还会列出 agent 报告的 slash commands，只读展示。非 ACP 会话、尚未建立 ACP 对话或 agent 不可用时，会显示对应原因。
 
 「日志级别」下拉框对所选服务器立即生效，默认 `info`。首次打开时没有已配置的 agent；旧文件中的插件 `options` 不再生效。只在由自己或信任的管理员控制的服务器上启用此插件，添加的可执行文件会以 OpenCode server 的账号运行。
 
 ## 限制
 
-- 模型目录需要开一个短会话向 agent 采集；agent 不支持 `session/close` 时，会在 agent 侧留下一个空会话。
+- 模型目录需要开一个短会话向 agent 采集；agent 既不支持 `session/close` 也不支持 `session/delete` 时，会在 agent 侧留下一个空会话。
 - 图片和音频以 base64 内联在 `session/prompt` 中转发；图片单张上限 5 MB，音频单段上限 20 MB（按解码后的原始字节计算）。超过上限或无法识别格式的附件会被忽略，并在回复中说明。
+- 其他附件默认以 `resource_link` 转发；只有 `file://` 的本地文本文件、且 agent 声明 `embeddedContext`、且不超过 1 MB 时才会内联。`data:` 等 inline URI 无法转换为 ACP 资源，会被跳过并提示。附件读取失败只影响该附件，不会中断本轮对话。
+- `acp_plan` 卡片按轮汇总：同一轮内同一份计划的多次更新只显示最终状态；计划不使用 OpenCode 的 todo 列表，因为 provider 流无法写入 todo store。
 - 是否接受图片/音频由 agent `initialize` 响应中的 `agentCapabilities.promptCapabilities.image` / `audio` 决定；未声明为 `true` 时模型不显示对应输入能力。`agy` 当前声明支持图片，不声明音频。
 - agent 回复中的图片和音频会保存到服务器临时目录 `os.tmpdir()/opencode/opencode-acp/images|audio/<sessionID>/`，并在回复正文中给出绝对路径，不会内联渲染；超过上限或无法解码的内容不会保存。
 - 实时工具结果中的图片/音频不会显示；导入历史时会保存工具结果里的图片/音频并给出路径。
 - 导入历史依赖 OpenCode 的实验性 session import 接口，按当前 2.4.x 实现。
 - 导入时用户附件会经过 server RPC 和 session import 两次传输，单次导入的附件总预算有限。
+- 删除 ACP 会话需要 agent 声明 `sessionCapabilities.delete`；仍绑定到存在的 OpenCode 会话时会返回冲突，需要先删除对应的对话。
 - 只针对 Desktop 验证；TUI 未适配。
 - OpenCode 的 revert / snapshot 对远端 agent 的改动无效，需要撤销时使用 git。
 - 插件 API 不提供表单：`elicitation/create` 只在 Desktop 中由插件窗口创建原生表单；TUI、web 或没有打开 Desktop 窗口时会返回 `decline`，agent 需要自行处理。
@@ -126,21 +133,25 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 ## 故障排查
 
-| 现象                              | 处理                                                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| 模型选择器里没有 `acp-agy` 的模型 | 首次启动后等待几秒，插件采集完模型目录会刷新；确认 `agy` 已安装且在 `PATH` 中；在设置页查看状态，或检查配置里的 `command` |
-| 模型列表为空且设置页提示采集失败  | 检查所选服务器的网络和 agent 表单中的代理环境变量，然后重试                                                               |
-| 第一轮卡住，约 60 秒后报握手超时  | 检查所选服务器是否能访问模型目录，必要时在 agent 表单中设置 `HTTPS_PROXY` / `HTTP_PROXY`                                  |
-| 提示远端 agent 尚未登录或没有凭据 | 先在终端运行一次 Antigravity CLI 完成登录                                                                                 |
-| 提示找不到可执行文件              | 安装对应 CLI，或把 `command` 改成实际路径                                                                                 |
-| agent 进程意外退出                | 下一轮会自动重启；原始错误在 OpenCode server 日志的 `[acp]` 行中                                                          |
-| 提示 ACP 会话不存在或已失效       | 下一轮会新建会话，历史上下文不会自动恢复                                                                                  |
-| 贴图/音频后提示已忽略             | 确认 agent 声明了 `promptCapabilities.image` / `audio`，且所选模型本身支持对应输入；图片不超过 5 MB，音频不超过 20 MB     |
-| 回复里提示图片/音频未能保存       | 检查服务器上 `os.tmpdir()/opencode/opencode-acp/` 是否可写，以及内容是否超过大小上限                                      |
-| 导入列表为空                      | 切换到「全部目录」；确认 agent 正在运行并声明了 `session/list` 和 `session/load`，且会话的工作目录在当前服务器上存在      |
-| 导入时提示不支持导入历史          | 升级服务器上的 OpenCode；`session.import` 是当前 2.4.x 的实验性接口                                                       |
-| Desktop 里看不到 Settings › ACP   | 在 Desktop 自己启动的本地 server 上安装插件；Desktop 只从该 server 加载插件页面，连接的其他服务器只运行 server 端         |
-| 需要更详细的日志                  | 在 Settings › ACP 将「日志级别」设为 `debug`，然后查看所选服务器日志                                                      |
+| 现象                              | 处理                                                                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 模型选择器里没有 `acp-agy` 的模型 | 首次启动后等待几秒，插件采集完模型目录会刷新；确认 `agy` 已安装且在 `PATH` 中；在设置页查看状态，或检查配置里的 `command`       |
+| 模型列表为空且设置页提示采集失败  | 检查所选服务器的网络和 agent 表单中的代理环境变量，然后重试                                                                     |
+| 第一轮卡住，约 60 秒后报握手超时  | 检查所选服务器是否能访问模型目录，必要时在 agent 表单中设置 `HTTPS_PROXY` / `HTTP_PROXY`                                        |
+| 提示远端 agent 尚未登录或没有凭据 | 先在终端运行一次 Antigravity CLI 完成登录                                                                                       |
+| 提示找不到可执行文件              | 安装对应 CLI，或把 `command` 改成实际路径                                                                                       |
+| agent 进程意外退出                | 下一轮会自动重启；原始错误在 OpenCode server 日志的 `[acp]` 行中                                                                |
+| 提示 ACP 会话不存在或已失效       | 下一轮会新建会话，历史上下文不会自动恢复                                                                                        |
+| 贴图/音频后提示已忽略             | 确认 agent 声明了 `promptCapabilities.image` / `audio`，且所选模型本身支持对应输入；图片不超过 5 MB，音频不超过 20 MB           |
+| 附件没有转成内联内容              | 确认附件是本地文件或 http(s) 链接；`data:` 等 inline URI 无法作为 ACP 资源转发，agent 未声明 `embeddedContext` 时文本也只发链接 |
+| 输入 `/compact` 没有发给 agent    | 该命令与 OpenCode 内置命令重名；改用 `/acp compact` 转发                                                                        |
+| 删除会话提示不支持                | 该 agent 未声明 `sessionCapabilities.delete`；升级 agent 或改用其 CLI 清理会话                                                  |
+| 一轮结束后没有 `acp_plan` 卡片    | agent 没有发送 `plan` / `plan_update`；计划只在轮结束时汇总显示                                                                 |
+| 回复里提示图片/音频未能保存       | 检查服务器上 `os.tmpdir()/opencode/opencode-acp/` 是否可写，以及内容是否超过大小上限                                            |
+| 导入列表为空                      | 切换到「全部目录」；确认 agent 正在运行并声明了 `session/list` 和 `session/load`，且会话的工作目录在当前服务器上存在            |
+| 导入时提示不支持导入历史          | 升级服务器上的 OpenCode；`session.import` 是当前 2.4.x 的实验性接口                                                             |
+| Desktop 里看不到 Settings › ACP   | 在 Desktop 自己启动的本地 server 上安装插件；Desktop 只从该 server 加载插件页面，连接的其他服务器只运行 server 端               |
+| 需要更详细的日志                  | 在 Settings › ACP 将「日志级别」设为 `debug`，然后查看所选服务器日志                                                            |
 
 ## 开发
 

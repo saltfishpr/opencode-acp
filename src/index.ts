@@ -25,6 +25,7 @@ import {
   type AbortImportInput,
   type AgentInput,
   type AgentStatus,
+  type DeleteSessionInput,
   type ImportableAgent,
   type ImportableSession,
   type ImportableSessionsInput,
@@ -204,6 +205,9 @@ export default Plugin.define({
       },
       abortImport(input) {
         return abortImport(ctx, bindings, input as AbortImportInput);
+      },
+      deleteSession(input) {
+        return deleteAgentSession(ctx, bindings, input as DeleteSessionInput);
       },
       sessionOptions(input) {
         return readSessionOptions(ctx, bindings, (input as { sessionID: string }).sessionID);
@@ -683,16 +687,78 @@ async function resolveAcpSession(
   }
 
   if (!client.hasSession(binding.sessionId)) {
-    if (!client.canLoadSession) return { status: "unavailable" };
-    try {
-      await client.loadSession(binding.sessionId, binding.cwd);
-    } catch (error) {
-      logWarn("acp", `could not load ${binding.sessionId} for session settings: ${message(error)}`);
-      return { status: "unavailable" };
+    if (client.canResumeSession) {
+      try {
+        await client.resumeSession(binding.sessionId, binding.cwd);
+      } catch (error) {
+        logWarn("acp", `could not resume ${binding.sessionId} for session settings: ${message(error)}`);
+      }
+    }
+
+    if (!client.hasSession(binding.sessionId)) {
+      if (!client.canLoadSession) return { status: "unavailable" };
+      try {
+        await client.loadSession(binding.sessionId, binding.cwd);
+      } catch (error) {
+        logWarn("acp", `could not load ${binding.sessionId} for session settings: ${message(error)}`);
+        return { status: "unavailable" };
+      }
     }
   }
 
   return { client, sessionId: binding.sessionId };
+}
+
+async function deleteAgentSession(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  input: DeleteSessionInput,
+): Promise<MutationResult> {
+  const agent = state.config.agents.find((item) => item.id === input.agentID);
+  const active = running.get(input.agentID);
+  if (agent === undefined || active === undefined) return { status: "notFound" };
+
+  let client: AcpClient;
+  try {
+    client = await active.runtime.ensureClient();
+  } catch (error) {
+    logWarn("acp", `could not start ${input.agentID} for session deletion: ${message(error)}`);
+    return { status: "saveFailed" };
+  }
+  if (!client.canDeleteSession) return { status: "unsupported" };
+
+  let entries: SessionBindingEntry[];
+  try {
+    entries = await bindings.list(input.agentID);
+  } catch (error) {
+    logWarn("acp", `could not read ${input.agentID} bindings for deletion: ${message(error)}`);
+    return { status: "saveFailed" };
+  }
+
+  const stale: string[] = [];
+  for (const entry of entries) {
+    if (entry.binding.sessionId !== input.sessionID) continue;
+    if (await sessionExists(ctx, entry.sessionID)) return { status: "conflict" };
+    stale.push(entry.sessionID);
+  }
+
+  for (const staleID of stale) {
+    try {
+      await bindings.remove(input.agentID, staleID);
+    } catch (error) {
+      logWarn("acp", `could not remove the stale binding ${staleID}: ${message(error)}`);
+      return { status: "saveFailed" };
+    }
+  }
+
+  try {
+    await client.deleteSession(input.sessionID);
+    logInfo("acp", `deleted ACP session ${input.sessionID}`);
+    return { status: "ok" };
+  } catch (error) {
+    logWarn("acp", `could not delete the ACP session ${input.sessionID}: ${message(error)}`);
+    return { status: "saveFailed" };
+  }
 }
 
 async function readSessionOptions(
@@ -701,8 +767,21 @@ async function readSessionOptions(
   sessionID: string,
 ): Promise<SessionOptionsView> {
   const resolved = await resolveAcpSession(ctx, bindings, sessionID);
-  if ("status" in resolved) return { status: resolved.status, options: [] };
-  return { status: "ok", options: sessionOptionViews(resolved.client, resolved.sessionId) };
+  if ("status" in resolved) return { status: resolved.status, options: [], commands: [] };
+  return {
+    status: "ok",
+    options: sessionOptionViews(resolved.client, resolved.sessionId),
+    commands: commandViews(resolved.client, resolved.sessionId),
+  };
+}
+
+/** Commands the agent advertised for this session; read-only in the settings page. */
+function commandViews(client: AcpClient, sessionId: string) {
+  return client.commands(sessionId).map((command) => ({
+    name: command.name,
+    description: command.description,
+    ...(command.input == null ? {} : { hint: command.input.hint }),
+  }));
 }
 
 /** Combines config options with the legacy mode state into one list. */

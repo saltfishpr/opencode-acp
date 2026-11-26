@@ -15,9 +15,11 @@ import { EMPTY_USAGE, noteUsageUpdate, usageOf, type TurnUsage } from "../acp/us
 import { logInfo, logWarn } from "../log.js";
 import type { SessionBindings } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
+import { buildResourceBlocks, type PromptFiles } from "./attachments.js";
 import { CardProjector } from "./cards.js";
 import { lastUserPrompt, type PromptContent } from "./content.js";
 import { saveAgentAudio, saveAgentImage } from "./media.js";
+import { PlanProjector } from "./plan.js";
 import { ToolProjector } from "./projection.js";
 
 /** Model and thinking level chosen for one OpenCode turn. */
@@ -38,6 +40,8 @@ export interface AcpModelDeps {
   readonly directory: (sessionID: string) => Promise<string>;
   /** ACP titles reported for each OpenCode session. */
   readonly titles: SessionTitles;
+  /** Files attached to each session's latest user prompt. */
+  readonly promptFiles: PromptFiles;
   readonly requestPermission: PermissionHandler;
   /** Asks the user for structured input the agent needs before continuing. */
   readonly requestElicitation: ElicitationHandler;
@@ -193,6 +197,15 @@ async function* turn(
     }
   }
 
+  // File attachments travel separately from the AI SDK prompt: they become
+  // resource links, or embedded text when the agent accepts embedded context.
+  const files = deps.promptFiles.get(sessionID, content.text);
+  if (files !== undefined && files.length > 0) {
+    const built = await buildResourceBlocks(files, { cwd, embedded: client.supportsEmbeddedContext });
+    if (built.blocks.length > 0) blocks = [...blocks, ...built.blocks];
+    for (const warning of built.warnings) yield* say(warning);
+  }
+
   if (blocks.length === 0) {
     yield* say("这条消息没有可发送的内容。");
     yield finish(OTHER, EMPTY_USAGE);
@@ -226,6 +239,7 @@ async function* turn(
   );
   const tools = new ToolProjector({ cwd });
   const cards = new CardProjector();
+  const plans = new PlanProjector();
   const usage: TurnUsage = {};
   let response: PromptResponse = { stopReason: "cancelled" };
 
@@ -315,7 +329,14 @@ async function* turn(
         continue;
       }
 
-      // Plans and commands are projected in later milestones.
+      if (
+        update.sessionUpdate === "plan" ||
+        update.sessionUpdate === "plan_update" ||
+        update.sessionUpdate === "plan_removed"
+      ) {
+        plans.update(update);
+        continue;
+      }
     }
 
     if (running.error !== undefined) throw running.error;
@@ -323,6 +344,7 @@ async function* turn(
   } catch (error) {
     yield* closeReasoning();
     yield* closeText();
+    for (const part of plans.finish()) yield part;
     for (const part of cards.finish()) yield part;
     for (const part of tools.finish()) yield part;
     logWarn("acp", message(error));
@@ -335,6 +357,7 @@ async function* turn(
 
   yield* closeReasoning();
   yield* closeText();
+  for (const part of plans.finish()) yield part;
   for (const part of cards.finish()) yield part;
   for (const part of tools.finish()) yield part;
   yield finish(stopReasonOf(response.stopReason), usageOf(response, usage));
@@ -439,14 +462,31 @@ async function resolveSession(
   if (binding !== undefined && binding.cwd === cwd) {
     if (client.hasSession(binding.sessionId)) return { client, acpSessionID: binding.sessionId };
 
+    let failure: unknown;
+
+    // Resume is cheaper: the agent keeps the conversation but does not replay it.
+    if (client.canResumeSession) {
+      try {
+        await client.resumeSession(binding.sessionId, cwd);
+        return { client, acpSessionID: binding.sessionId };
+      } catch (error) {
+        failure = error;
+        logWarn("acp", `session/resume failed: ${message(error)}`);
+      }
+    }
+
     if (client.canLoadSession) {
       try {
         await client.loadSession(binding.sessionId, cwd);
         return { client, acpSessionID: binding.sessionId };
       } catch (error) {
+        failure = error;
         logWarn("acp", `session/load failed: ${message(error)}`);
-        warn(`未能恢复上一次的 ACP 会话（${explain(error, client.failure)}），已新建会话；之前的上下文不在本轮内。`);
       }
+    }
+
+    if (failure !== undefined) {
+      warn(`未能恢复上一次的 ACP 会话（${explain(failure, client.failure)}），已新建会话；之前的上下文不在本轮内。`);
     }
   }
 

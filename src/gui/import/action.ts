@@ -14,12 +14,13 @@ export async function importSession(
   },
 ): Promise<void> {
   const { row } = input;
+  const location = { location: { directory: row.cwd } };
 
   try {
     const rpc = row.server.client.rpc(AcpSettings);
     const prepared = (await rpc.prepareImport(
       { agentID: row.agentID, sessionID: row.id },
-      { signal: AbortSignal.timeout(120_000) },
+      { ...location, signal: AbortSignal.timeout(120_000) },
     )) as PrepareImportResult;
 
     if (prepared.status !== "ok" || prepared.payload === undefined) {
@@ -36,7 +37,7 @@ export async function importSession(
 
     const abort = () =>
       rpc
-        .abortImport({ agentID: row.agentID, sessionID: row.id, opencodeSessionID: prepared.sessionID })
+        .abortImport({ agentID: row.agentID, sessionID: row.id, opencodeSessionID: prepared.sessionID }, location)
         .catch(() => undefined);
 
     if (input.signal.aborted) {

@@ -13,10 +13,12 @@ export function ImportGroupSection(props: {
   agentNameOf(agentID: string): string;
   age(updatedAt: string): string;
   pendingKey: string | undefined;
+  deletingKey: string | undefined;
   disabled: boolean;
   onToggle(): void;
   onMore(): void;
   onImport(row: ImportRowData): void;
+  onDelete(row: ImportRowData): void;
 }) {
   const ctx = usePlugin<typeof definition>();
   // Matched rows, including the ones hidden behind "show more".
@@ -58,8 +60,11 @@ export function ImportGroupSection(props: {
                 agentName={mixedAgents() ? props.agentNameOf(row.agentID) : ""}
                 age={props.age(row.updatedAt)}
                 pending={props.pendingKey === row.key}
+                deleting={props.deletingKey === row.key}
                 disabled={props.disabled || !row.available}
+                deleteDisabled={props.disabled}
                 onImport={() => props.onImport(row)}
+                onDelete={() => props.onDelete(row)}
               />
             )}
           </For>

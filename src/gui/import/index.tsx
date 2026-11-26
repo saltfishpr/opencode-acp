@@ -1,5 +1,6 @@
 import { usePlugin } from "@opencode/plugin/gui";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { AcpSettings, type MutationResult } from "../../rpc.js";
 import { definition } from "../definition.js";
 import { importSession } from "./action.js";
 import { createImportController } from "./controller.js";
@@ -24,6 +25,7 @@ export function ImportSessions(props: { close(): void }) {
   const [limits, setLimits] = createSignal<Record<string, number>>({});
   const [order, setOrder] = createSignal<Record<string, number>>({});
   const [pending, setPending] = createSignal<string>();
+  const [deleting, setDeleting] = createSignal<string>();
   const [now, setNow] = createSignal(Date.now());
   let list: { scrollTop: number } | undefined;
 
@@ -79,6 +81,7 @@ export function ImportSessions(props: { close(): void }) {
   const busy = () => loading() || readingAgents().length > 0;
   const skeleton = () => loading() || (rows().length === 0 && readingAgents().length > 0);
   const anyReady = () => agents().some((agent) => agent.status === "ready");
+  const working = () => pending() !== undefined || deleting() !== undefined;
 
   const reasonText = (reason: string) => {
     const failures = new Set(["login", "exited", "timeout", "spawn", "discovery", "noModels"]);
@@ -139,7 +142,7 @@ export function ImportSessions(props: { close(): void }) {
   }
 
   async function runImport(row: ImportRowData) {
-    if (pending() !== undefined || !row.available) return;
+    if (working() || !row.available) return;
     setPending(row.key);
     setError(undefined);
     try {
@@ -155,6 +158,50 @@ export function ImportSessions(props: { close(): void }) {
     }
   }
 
+  async function runDelete(row: ImportRowData) {
+    if (working()) return;
+
+    const agent = nameOf(row.server.id, row.agentID);
+    const confirmed = await ctx.dialogs.confirm({
+      title: ctx.t("import.deleteTitle"),
+      description: ctx.t("import.deleteDescription", { agent }),
+      confirm: ctx.t("import.delete"),
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setDeleting(row.key);
+    setError(undefined);
+    try {
+      const outcome = (await row.server.client
+        .rpc(AcpSettings)
+        .deleteSession(
+          { agentID: row.agentID, sessionID: row.id },
+          { location: { directory: row.cwd }, signal: AbortSignal.timeout(60_000) },
+        )) as MutationResult;
+
+      if (outcome.status === "ok" || outcome.status === "notFound") {
+        void reload();
+        return;
+      }
+
+      setError(
+        outcome.status === "unsupported"
+          ? ctx.t("import.error.deleteUnsupported")
+          : outcome.status === "conflict"
+            ? ctx.t("import.error.deleteConflict")
+            : ctx.t("import.error.deleteFailed"),
+      );
+    } catch (cause) {
+      const type = typeof cause === "object" && cause !== null && "type" in cause ? cause.type : undefined;
+      setError(
+        type === "rpc.method_not_found" ? ctx.t("import.error.updatePlugin") : ctx.t("import.error.requestFailed"),
+      );
+    } finally {
+      setDeleting(undefined);
+    }
+  }
+
   return (
     <ctx.ui.Dialog
       title={ctx.t("import.title")}
@@ -162,14 +209,14 @@ export function ImportSessions(props: { close(): void }) {
       size="large"
       footer={
         <>
-          <ctx.ui.Button variant="ghost" disabled={pending() !== undefined} onClick={props.close}>
+          <ctx.ui.Button variant="ghost" disabled={working()} onClick={props.close}>
             {ctx.t("import.cancel")}
           </ctx.ui.Button>
           <ctx.ui.Button
             variant="neutral"
             icon="refresh"
             busy={busy()}
-            disabled={pending() !== undefined || loading()}
+            disabled={working() || loading()}
             onClick={() => void reload()}
           >
             {ctx.t("import.refresh")}
@@ -191,7 +238,7 @@ export function ImportSessions(props: { close(): void }) {
             type="button"
             class="acp-scope"
             aria-pressed={effectiveScope() === "current"}
-            disabled={loading() || pending() !== undefined || currentRoot() === undefined}
+            disabled={loading() || working() || currentRoot() === undefined}
             onClick={() => changeScope("current")}
           >
             {ctx.t("import.scope.current")}
@@ -200,7 +247,7 @@ export function ImportSessions(props: { close(): void }) {
             type="button"
             class="acp-scope"
             aria-pressed={effectiveScope() === "all"}
-            disabled={loading() || pending() !== undefined}
+            disabled={loading() || working()}
             onClick={() => changeScope("all")}
           >
             {ctx.t("import.scope.all")}
@@ -257,10 +304,12 @@ export function ImportSessions(props: { close(): void }) {
                     agentNameOf={(agentID) => nameOf(item.group.server.id, agentID)}
                     age={relativeTime}
                     pendingKey={pending()}
-                    disabled={pending() !== undefined}
+                    deletingKey={deleting()}
+                    disabled={working()}
                     onToggle={() => toggle(item.group)}
                     onMore={() => showMore(item.group)}
                     onImport={(row) => void runImport(row)}
+                    onDelete={(row) => void runDelete(row)}
                   />
                 );
               }}

@@ -122,6 +122,20 @@ export interface SessionOptionView {
 export interface SessionOptionsView {
   readonly status: SessionOptionStatus;
   readonly options: readonly SessionOptionView[];
+  /** Absent when the server predates command listing. */
+  readonly commands?: readonly SessionCommandView[];
+}
+
+export interface SessionCommandView {
+  readonly name: string;
+  readonly description: string;
+  /** Placeholder for the command's arguments, when the agent asks for them. */
+  readonly hint?: string;
+}
+
+export interface DeleteSessionInput {
+  readonly agentID: string;
+  readonly sessionID: string;
 }
 
 export interface SessionOptionsInput {
@@ -149,7 +163,7 @@ export interface ElicitationFormInput {
   readonly formID: string;
 }
 
-const RESULTS = ["ok", "conflict", "busy", "invalid", "duplicate", "notFound", "saveFailed"] as const;
+const RESULTS = ["ok", "conflict", "busy", "invalid", "duplicate", "notFound", "unsupported", "saveFailed"] as const;
 export type MutationResult = { readonly status: (typeof RESULTS)[number]; readonly field?: string };
 
 const text = { type: "string" } as const;
@@ -264,8 +278,24 @@ const sessionOptionsOutput = {
   properties: {
     status: { enum: SESSION_OPTION_STATUS },
     options: { type: "array", items: sessionOption },
+    commands: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: text, description: text, hint: text },
+        required: ["name", "description"],
+        additionalProperties: false,
+      },
+    },
   },
   required: ["status", "options"],
+  additionalProperties: false,
+} as const;
+
+const deleteSessionInput = {
+  type: "object",
+  properties: { agentID: text, sessionID: text },
+  required: ["agentID", "sessionID"],
   additionalProperties: false,
 } as const;
 
@@ -431,6 +461,10 @@ export const AcpSettings = Rpc.define({
     },
     abortImport: {
       input: abortImportInput,
+      output: result,
+    },
+    deleteSession: {
+      input: deleteSessionInput,
       output: result,
     },
     sessionOptions: {

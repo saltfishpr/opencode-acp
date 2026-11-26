@@ -131,6 +131,22 @@ export function SessionOptions() {
                     )}
                   </For>
                 </Show>
+                <ctx.ui.SettingsRow title={ctx.t("session.commands")} />
+                <Show
+                  when={(data().commands ?? []).length > 0}
+                  fallback={<ctx.ui.SettingsRow title={ctx.t("session.noCommands")} />}
+                >
+                  <For each={data().commands ?? []}>
+                    {(command) => (
+                      <ctx.ui.SettingsRow
+                        title={`/${command.name}`}
+                        description={
+                          command.hint === undefined ? command.description : `${command.description} · ${command.hint}`
+                        }
+                      />
+                    )}
+                  </For>
+                </Show>
               </Show>
             )}
           </Show>

@@ -4,6 +4,7 @@ import {
   client,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type AvailableCommand,
   type ClientConnection,
   type ContentBlock,
@@ -80,6 +81,12 @@ const CLOSE_TIMEOUT_MS = 5_000;
 /** Bound for `session/set_mode`. */
 const MODE_TIMEOUT_MS = 15_000;
 
+/** Bound for `session/resume`, which starts a stored session without replaying it. */
+const RESUME_TIMEOUT_MS = 60_000;
+
+/** Bound for `session/delete`. */
+const DELETE_TIMEOUT_MS = 15_000;
+
 /** Upper bound on session updates buffered while no turn is running. */
 const PENDING_LIMIT = 100;
 
@@ -109,6 +116,8 @@ export class AcpClient {
   /** Session-level updates received while no turn was running. */
   private readonly pending: Map<string, SessionUpdate[]>;
   private readonly loaded = new Set<string>();
+  /** Sessions this process created, as opposed to resumed or loaded from storage. */
+  private readonly owned = new Set<string>();
   /** Sessions whose replayed `session/load` updates are being collected. */
   private readonly recorders: Map<string, SessionUpdate[]>;
   /** Sessions whose replayed updates are dropped instead of buffered. */
@@ -345,6 +354,7 @@ export class AcpClient {
               notices: {},
               compaction: {},
             },
+            plan: {},
             elicitation: { form: {} },
           },
           clientInfo: { name: "opencode-acp", version: "0.0.0" },
@@ -412,6 +422,16 @@ export class AcpClient {
     return this.initialize.agentCapabilities?.sessionCapabilities?.close != null;
   }
 
+  /** Whether the agent advertises `session/resume`. */
+  get canResumeSession(): boolean {
+    return this.initialize.agentCapabilities?.sessionCapabilities?.resume != null;
+  }
+
+  /** Whether the agent advertises `session/delete`. */
+  get canDeleteSession(): boolean {
+    return this.initialize.agentCapabilities?.sessionCapabilities?.delete != null;
+  }
+
   /** Prompt content types the agent declared in `initialize`; a missing field means unsupported. */
   get promptCapabilities(): PromptCapabilities | undefined {
     return this.initialize.agentCapabilities?.promptCapabilities;
@@ -425,6 +445,11 @@ export class AcpClient {
   /** Whether the agent accepts `audio` content blocks. */
   get supportsAudio(): boolean {
     return this.promptCapabilities?.audio === true;
+  }
+
+  /** Whether the agent accepts embedded `resource` content in prompts. */
+  get supportsEmbeddedContext(): boolean {
+    return this.promptCapabilities?.embeddedContext === true;
   }
 
   /** Whether the underlying process or connection has gone away. */
@@ -449,7 +474,28 @@ export class AcpClient {
     this.configs.set(response.sessionId, response.configOptions ?? []);
     this.rememberModes(response.sessionId, response.modes);
     this.loaded.add(response.sessionId);
+    this.owned.add(response.sessionId);
     return response.sessionId;
+  }
+
+  /**
+   * Resumes a stored session without replaying its messages. Unlike
+   * `session/load`, this works for agents that keep the conversation but cannot
+   * return it, so the client starts with only the lifecycle state.
+   */
+  async resumeSession(sessionId: string, cwd: string): Promise<void> {
+    if (this.isClosed) throw this.closedError();
+    if (!this.canResumeSession) throw new Error("ACP agent does not support session/resume");
+
+    const response = await this.connection.agent.request(
+      "session/resume",
+      { sessionId, cwd, mcpServers: [] },
+      { cancellationSignal: AbortSignal.timeout(RESUME_TIMEOUT_MS), stopWaitingOnCancel: true },
+    );
+
+    this.configs.set(sessionId, response.configOptions ?? []);
+    this.rememberModes(sessionId, response.modes);
+    this.loaded.add(sessionId);
   }
 
   /** Lists the agent's stored sessions, following cursors up to a safety bound. */
@@ -516,6 +562,27 @@ export class AcpClient {
     }
   }
 
+  /**
+   * Deletes a stored session from the agent. A session the agent no longer
+   * knows about is treated as success, so cleanup is idempotent.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    if (this.isClosed) throw this.closedError();
+    if (!this.canDeleteSession) throw new Error("ACP agent does not support session/delete");
+
+    try {
+      await this.connection.agent.request(
+        "session/delete",
+        { sessionId },
+        { cancellationSignal: AbortSignal.timeout(DELETE_TIMEOUT_MS), stopWaitingOnCancel: true },
+      );
+    } catch (error) {
+      if (!(error instanceof RequestError && error.code === -32002)) throw error;
+    }
+
+    this.forget(sessionId);
+  }
+
   /** Latest configuration options reported for a session, or an empty list if none are known. */
   configOptions(sessionId: string): readonly SessionConfigOption[] {
     return this.configs.get(sessionId) ?? [];
@@ -575,7 +642,8 @@ export class AcpClient {
   /**
    * Reads the agent's model catalog by creating a short-lived session and
    * selecting each advertised model, because thinking levels are reported per
-   * model and only through the session configuration state.
+   * model and only through the session configuration state. A model that
+   * rejects the switch is kept without thinking levels.
    */
   async discoverModels(cwd: string): Promise<Catalog> {
     if (this.isClosed) throw this.closedError();
@@ -587,8 +655,9 @@ export class AcpClient {
     );
 
     const sessionId = created.sessionId;
+    // Created here, so `closeSession` may delete it on agents without `session/close`.
+    this.owned.add(sessionId);
     const initial = created.configOptions ?? [];
-    this.configs.set(sessionId, initial);
 
     const models: CatalogModel[] = [];
     try {
@@ -596,16 +665,26 @@ export class AcpClient {
 
       if (model !== undefined) {
         for (const value of valuesOf(model)) {
-          const options = await this.setConfigOption(sessionId, model.id, value.value);
-          const thought = selectOption(options, "thought_level");
-
-          models.push({
+          const entry = {
             id: value.value,
             name: value.name,
             ...(value.description == null ? {} : { description: value.description }),
-            thoughts: valuesOf(thought).map((item) => ({ value: item.value, name: item.name })),
-            ...(thought === undefined ? {} : { defaultThought: thought.currentValue }),
-          });
+          };
+
+          try {
+            const options = await this.setConfigOption(sessionId, model.id, value.value);
+            const thought = selectOption(options, "thought_level");
+
+            models.push({
+              ...entry,
+              thoughts: valuesOf(thought).map((item) => ({ value: item.value, name: item.name })),
+              ...(thought === undefined ? {} : { defaultThought: thought.currentValue }),
+            });
+          } catch (error) {
+            // One model that refuses a switch must not hide every other model.
+            logWarn(this.name, `could not read thinking levels for ${value.value}: ${errorMessage(error)}`);
+            models.push({ ...entry, thoughts: [] });
+          }
         }
       }
 
@@ -618,15 +697,25 @@ export class AcpClient {
     }
   }
 
-  /** Closes a session this client created; ignored when the agent does not advertise it. */
+  /**
+   * Closes a session this client created. Agents without `session/close` get
+   * `session/delete` as the cleanup fallback. Loaded or resumed sessions are
+   * only released locally: deleting them would destroy the user's history.
+   */
   async closeSession(sessionId: string): Promise<void> {
-    this.loaded.delete(sessionId);
-    this.configs.delete(sessionId);
-    this.modeStates.delete(sessionId);
-    this.commandLists.delete(sessionId);
-    this.titles.delete(sessionId);
-    this.pending.delete(sessionId);
-    if (!this.canCloseSession || this.isClosed) return;
+    const owned = this.owned.has(sessionId);
+    this.forget(sessionId);
+    if (this.isClosed) return;
+
+    if (!this.canCloseSession) {
+      if (!this.canDeleteSession || !owned) return;
+      try {
+        await this.deleteSession(sessionId);
+      } catch (error) {
+        logWarn(this.name, `session/delete failed: ${errorMessage(error)}`);
+      }
+      return;
+    }
 
     try {
       await this.connection.agent.request(
@@ -760,6 +849,19 @@ export class AcpClient {
     return new Error("ACP connection closed");
   }
 
+  /** Drops everything learned about one ACP session. */
+  private forget(sessionId: string): void {
+    this.loaded.delete(sessionId);
+    this.owned.delete(sessionId);
+    this.configs.delete(sessionId);
+    this.modeStates.delete(sessionId);
+    this.commandLists.delete(sessionId);
+    this.titles.delete(sessionId);
+    this.pending.delete(sessionId);
+    this.replaying.delete(sessionId);
+    this.recorders.delete(sessionId);
+  }
+
   /** Answers pending permission requests with `cancelled` before the turn ends. */
   private abortTurn(sessionId: string): void {
     const turn = this.turns.get(sessionId);
@@ -782,6 +884,7 @@ export class AcpClient {
     this.modeStates.clear();
     this.commandLists.clear();
     this.titles.clear();
+    this.owned.clear();
     for (const turn of this.turns.values()) {
       if (!turn.controller.signal.aborted) turn.controller.abort();
       this.releasePending(turn);

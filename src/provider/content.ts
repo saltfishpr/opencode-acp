@@ -13,6 +13,8 @@ import { AUDIO_TYPES, IMAGE_TYPES, normalizeAudioType, normalizeImageType } from
 export interface PromptContent {
   /** Blocks in the order the user wrote them. */
   readonly blocks: ContentBlock[];
+  /** Text of the message after joining adjacent text parts, used to match its attachments. */
+  readonly text: string;
   /** Why a part was left out, phrased for the assistant message. */
   readonly warnings: string[];
 }
@@ -29,7 +31,7 @@ export function lastUserPrompt(prompt: LanguageModelV3Prompt): PromptContent {
     if (message?.role !== "user") continue;
     return build(message.content);
   }
-  return { blocks: [], warnings: [] };
+  return { blocks: [], text: "", warnings: [] };
 }
 
 function build(content: Array<LanguageModelV3TextPart | LanguageModelV3FilePart>): PromptContent {
@@ -38,13 +40,17 @@ function build(content: Array<LanguageModelV3TextPart | LanguageModelV3FilePart>
   const oversizedAudio: string[] = [];
   const unreadable: string[] = [];
   const unsupported: string[] = [];
+  const texts: string[] = [];
   let text: string[] = [];
 
   // Adjacent text parts become one block, joined the way the text-only path
   // used to join them, so adding an image does not change the surrounding text.
   const flushText = () => {
     const joined = text.join("\n").trim();
-    if (joined.length > 0) blocks.push({ type: "text", text: joined });
+    if (joined.length > 0) {
+      blocks.push({ type: "text", text: joined });
+      texts.push(joined);
+    }
     text = [];
   };
 
@@ -88,6 +94,7 @@ function build(content: Array<LanguageModelV3TextPart | LanguageModelV3FilePart>
   flushText();
   return {
     blocks,
+    text: texts.join("\n"),
     warnings: warningsOf(oversizedImages, oversizedAudio, unreadable, unsupported),
   };
 }
@@ -102,7 +109,8 @@ function warningsOf(
   if (oversizedImages.length > 0) warnings.push(`已忽略图片 ${list(oversizedImages)}：超过 5 MB。`);
   if (oversizedAudio.length > 0) warnings.push(`已忽略音频 ${list(oversizedAudio)}：超过 20 MB。`);
   if (unreadable.length > 0) warnings.push(`已忽略附件 ${list(unreadable)}：无法读取附件数据。`);
-  if (unsupported.length > 0) warnings.push(`已忽略附件 ${list(unsupported)}：只转发图片和音频附件。`);
+  if (unsupported.length > 0)
+    warnings.push(`附件 ${list(unsupported)} 仅在 URI 可用时通过 ACP 资源转发，否则会被忽略。`);
   return warnings;
 }
 

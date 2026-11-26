@@ -5,6 +5,7 @@ import type { AgentRuntime, AgentState } from "../acp/runtime.js";
 import { logWarn } from "../log.js";
 import { SessionBindings, sessionDirectory } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
+import { PromptFiles } from "./attachments.js";
 import { acpLanguageModel } from "./language.js";
 
 const ADAPTER = "acp";
@@ -26,6 +27,7 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
   const registered = new Set<string>();
   const occupied = new Set<string>();
   const firstPrompts = new Map<string, string>();
+  const promptFiles = new PromptFiles();
 
   const language = (info: Model.Info) => {
     if (!registered.has(info.providerID)) return;
@@ -45,6 +47,7 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
         bindings: options.bindings,
         directory: (sessionID) => sessionDirectory(ctx, sessionID),
         titles: options.titles,
+        promptFiles,
         requestPermission: options.requestPermission,
         requestElicitation: options.requestElicitation,
         onTitle: (sessionID, title, previous) => {
@@ -58,6 +61,7 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
   const registrations = await Promise.all([
     ctx.session.hook("prompt", (event) => {
       const text = event.prompt.text.trim();
+      promptFiles.remember(event.sessionID, text, event.prompt.files);
       if (text.length === 0 || firstPrompts.has(event.sessionID)) return;
 
       firstPrompts.set(event.sessionID, text.slice(0, 60));
@@ -65,6 +69,25 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
         const oldest = firstPrompts.keys().next().value;
         if (oldest !== undefined) firstPrompts.delete(oldest);
       }
+    }),
+    // Unknown slash commands already pass through OpenCode as prompts. This
+    // router exists for ACP commands that share a name with a built-in one.
+    ctx.command.transform((editor) => {
+      editor.add({
+        name: "acp",
+        description: "Run a command in the current ACP agent: /acp <command> [args]",
+        execute: async (input) => {
+          const text = input.prompt.text.trim();
+          if (text.length === 0) return;
+
+          const session = await ctx.session.get({ sessionID: input.sessionID });
+          const providerID = session.model?.providerID;
+          if (providerID === undefined || !options.agents.has(providerID)) return;
+
+          const command = text.startsWith("/") ? text : `/${text}`;
+          await ctx.session.prompt({ sessionID: input.sessionID, text: command, delivery: input.delivery });
+        },
+      });
     }),
     ctx.provider.transform((editor) => {
       registered.clear();

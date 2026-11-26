@@ -39,12 +39,13 @@ export async function loadImportSessions(
   signal: AbortSignal,
 ): Promise<readonly ImportableSession[] | undefined> {
   try {
-    const view = (await server.client
-      .rpc(AcpSettings)
-      .importableSessions(
-        { agentID, ...(cwd === undefined ? {} : { cwd }) },
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(SESSIONS_TIMEOUT_MS)]) },
-      )) as ImportSessionsView;
+    const view = (await server.client.rpc(AcpSettings).importableSessions(
+      { agentID, ...(cwd === undefined ? {} : { cwd }) },
+      {
+        ...(cwd === undefined ? {} : { location: { directory: cwd } }),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(SESSIONS_TIMEOUT_MS)]),
+      },
+    )) as ImportSessionsView;
     return view.sessions;
   } catch {
     return undefined;

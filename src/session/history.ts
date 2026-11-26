@@ -6,6 +6,7 @@ import type { LanguageModelV3StreamPart } from "@ai-sdk/provider";
 import { base64Bytes, normalizeBase64 } from "../provider/base64.js";
 import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES, saveAgentAudio, saveAgentImage } from "../provider/media.js";
 import { extensionFor, mediaKind, mimeFromName, normalizeMediaType, type MediaKind } from "../provider/mime.js";
+import { planMarkdown, planSnapshot } from "../provider/plan.js";
 import { ToolProjector } from "../provider/projection.js";
 
 /** Total decoded media bytes imported into one session. */
@@ -118,6 +119,7 @@ export async function buildImportPayload(input: HistoryInput): Promise<ImportPay
   let budget = MAX_TOTAL_ATTACHMENT_BYTES;
   const messages: StoredMessage[] = [];
   const compactions = new Map<string, string>();
+  const plans = new Map<string, string>();
 
   const messageID = () => `msg_${crypto.randomUUID().replaceAll("-", "")}`;
 
@@ -154,12 +156,15 @@ export async function buildImportPayload(input: HistoryInput): Promise<ImportPay
   }
 
   async function flushAssistant(): Promise<void> {
-    if (assistant === undefined) return;
+    if (assistant === undefined && plans.size === 0) return;
 
-    const current = assistant;
+    const current = assistant ?? ensureAssistant();
     assistant = undefined;
     applyParts(current, current.projector.finish());
     for (const content of current.toolContent.values()) await collectToolMedia(current, content);
+    // Plans arrive as full snapshots, so append only the final one per plan ID.
+    for (const markdown of plans.values()) appendText(current, markdown, true);
+    plans.clear();
     if (current.content.length === 0) return;
 
     messages.push({
@@ -575,6 +580,15 @@ export async function buildImportPayload(input: HistoryInput): Promise<ImportPay
 
       case "usage_update": {
         usage = update.used;
+        break;
+      }
+
+      case "plan":
+      case "plan_update":
+      case "plan_removed": {
+        flushUser();
+        const snapshot = planSnapshot(update);
+        if (snapshot !== undefined) plans.set(snapshot.planId, planMarkdown(snapshot));
         break;
       }
 
