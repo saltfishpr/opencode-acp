@@ -10,7 +10,9 @@ import {
   onCleanup,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { Plugin, SettingsPage, usePlugin, type ServerRef } from "@opencode/plugin/gui";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { Plugin, SettingsPage, Style, usePlugin, type ServerRef } from "@opencode/plugin/gui";
+import css from "./gui.css?inline";
 import { LOG_LEVELS } from "./log.js";
 import {
   AcpSettings,
@@ -29,7 +31,10 @@ const definition = Plugin.define({
       description: "Manage the ACP agents that run on the selected server.",
       server: "Server",
       thisComputer: "This computer",
-      manageServers: "Manage servers",
+      manageServers: "Manage servers…",
+      unreachable: "Unreachable",
+      serverIncompatible: "Incompatible",
+      loading: "Loading ACP settings…",
       offline: "Server is offline. Reconnect to manage its ACP agents.",
       incompatible: "This server version is incompatible with OpenCode Desktop.",
       unavailable: "The ACP plugin is not loaded on this server.",
@@ -100,7 +105,10 @@ const definition = Plugin.define({
       description: "管理在所选服务器上运行的 ACP agent。",
       server: "服务器",
       thisComputer: "此电脑",
-      manageServers: "管理服务器",
+      manageServers: "管理服务器…",
+      unreachable: "无法连接",
+      serverIncompatible: "版本不兼容",
+      loading: "正在加载 ACP 设置…",
       offline: "服务器已离线。重新连接后可管理 ACP agent。",
       incompatible: "此服务器版本与 OpenCode Desktop 不兼容。",
       unavailable: "此服务器未加载 ACP 插件。",
@@ -110,7 +118,7 @@ const definition = Plugin.define({
       empty: "此服务器还没有配置 ACP agent。",
       add: "添加 Agent",
       added: "已添加",
-      custom: "Custom",
+      custom: "自定义",
       addPreset: "添加 {{name}}",
       addCustom: "添加自定义 Agent",
       editAgent: "编辑 {{name}}",
@@ -172,6 +180,7 @@ const definition = Plugin.define({
 export default Plugin.define({
   ...definition,
   setup(ctx) {
+    ctx.add(Style, css);
     ctx.add(SettingsPage, {
       id: "acp",
       get title() {
@@ -189,11 +198,96 @@ type Connection = { id: string; client: ServerRef["client"] };
 type LoadError = "unavailable" | "updatePlugin" | "loadFailed";
 type LoadResult = { connection: Connection; settings: SettingsView } | { connection: Connection; error: LoadError };
 
+function ServerSwitcher(props: { ids: readonly string[]; selected?: string; onSelect(id: string): void }) {
+  const ctx = usePlugin<typeof definition>();
+  const server = () => ctx.servers.get(props.selected ?? "");
+  const status = (server: ServerRef | undefined) => {
+    if (server?.compatible === false) return "incompatible";
+    return server?.connected ? "online" : "offline";
+  };
+  const statusText = (server: ServerRef | undefined) => {
+    const state = status(server);
+    if (state === "incompatible") return ctx.t("serverIncompatible");
+    return state === "offline" ? ctx.t("unreachable") : undefined;
+  };
+
+  // The SDK's Menu only accepts text and leading icons. Use the same primitive as Providers for radio rows.
+  return (
+    <DropdownMenu placement="bottom-end" gutter={6} modal={false}>
+      <DropdownMenu.Trigger
+        class="acp-server-switcher"
+        data-component="button-v2"
+        data-variant="outline"
+        data-size="small"
+      >
+        <span class="acp-server-dot" data-status={status(server())} aria-hidden="true" />
+        <span class="acp-server-label">{ctx.t("server")}</span>
+        <bdi class="acp-server-name">{server()?.name ?? props.selected}</bdi>
+        <Show when={statusText(server())}>{(text: () => string) => <span class="sr-only">{text()}</span>}</Show>
+        <ctx.ui.Icon name="chevron-down" class="acp-server-chevron" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content class="acp-server-menu" data-component="menu-v2-content" data-appearance="compact">
+          <DropdownMenu.RadioGroup value={props.selected} onChange={props.onSelect}>
+            <For each={props.ids}>
+              {(id) => {
+                const option = () => ctx.servers.get(id);
+                const name = () => option()?.name ?? id;
+                return (
+                  <DropdownMenu.RadioItem
+                    value={id}
+                    textValue={name()}
+                    closeOnSelect
+                    data-component="menu-v2-item"
+                    data-appearance="compact"
+                  >
+                    <span data-slot="menu-v2-item-content">
+                      <span class="acp-server-dot" data-status={status(option())} aria-hidden="true" />
+                      <span class="acp-server-option">
+                        <bdi class="acp-server-name">{name()}</bdi>
+                        <Show when={option()?.builtin}>
+                          <span class="acp-server-label">· {ctx.t("thisComputer")}</span>
+                        </Show>
+                      </span>
+                      <Show when={statusText(option())}>
+                        {(text: () => string) => <span class="acp-server-status">{text()}</span>}
+                      </Show>
+                    </span>
+                    <DropdownMenu.ItemIndicator forceMount data-slot="menu-v2-item-indicator">
+                      <ctx.ui.Icon name="check" size="small" />
+                    </DropdownMenu.ItemIndicator>
+                  </DropdownMenu.RadioItem>
+                );
+              }}
+            </For>
+          </DropdownMenu.RadioGroup>
+          <DropdownMenu.Separator data-slot="menu-v2-separator" data-appearance="compact" />
+          <DropdownMenu.Item
+            data-component="menu-v2-item"
+            data-appearance="compact"
+            onSelect={() => ctx.layout.settings("servers")}
+          >
+            <span data-slot="menu-v2-item-content">
+              <ctx.ui.Icon name="server" class="acp-server-chevron" />
+              {ctx.t("manageServers")}
+            </span>
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu>
+  );
+}
+
 function Settings() {
   const ctx = usePlugin<typeof definition>();
   const [selection, selectServer] = createSignal(ctx.sessions.current()?.server.id);
   const ids = () => ctx.servers.list();
-  const selectedID = () => selection() ?? ids().find((id) => ctx.servers.get(id)?.builtin) ?? ids()[0];
+  const selectedID = () => {
+    const id = selection();
+    const available = ids();
+    if (id !== undefined && available.includes(id)) return id;
+    return available.find((id) => ctx.servers.get(id)?.builtin) ?? available[0];
+  };
   const selected = () => ctx.servers.get(selectedID() ?? "");
   const connection = createMemo<Connection | undefined>((previous) => {
     const server = selected();
@@ -310,97 +404,96 @@ function Settings() {
       description={ctx.t("description")}
       actions={
         <Show when={ids().length > 1}>
-          <ctx.ui.Menu
-            trigger="button"
-            label={
-              selected()?.builtin ? `${ctx.t("thisComputer")} ⌄` : `${ctx.t("server")} ${selected()?.name ?? ""} ⌄`
-            }
-            items={[
-              ...ids().map((id) => {
-                const server = ctx.servers.get(id);
-                return {
-                  label: `${server?.connected ? "●" : "○"} ${server === undefined ? id : serverLabel(server)}`,
-                  ...(id === selectedID() ? { icon: "check" as const } : {}),
-                  onSelect: () => {
-                    selectServer(id);
-                    setActionError(undefined);
-                  },
-                };
-              }),
-              { type: "separator" },
-              { label: ctx.t("manageServers"), icon: "server", onSelect: () => ctx.layout.settings("servers") },
-            ]}
+          <ServerSwitcher
+            ids={ids()}
+            selected={selectedID()}
+            onSelect={(id) => {
+              selectServer(id);
+              setActionError(undefined);
+            }}
           />
         </Show>
       }
     >
-      <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", gap: "12px" }}>
-        <h2 style={{ "font-size": "inherit", "font-weight": "600", margin: "0" }}>{ctx.t("agents")}</h2>
-        <ctx.ui.Menu
-          trigger="button"
-          icon="plus"
-          label={ctx.t("add")}
-          disabled={settings() === undefined || pending() !== undefined}
-          items={[
-            ...PRESETS.map((preset) => {
-              const added = settings()?.agents.some(({ id }) => id === preset.id) === true;
-              return {
-                label: added ? `${preset.name} · ${ctx.t("added")}` : preset.name,
-                disabled: added,
+      <section class="settings-section acp-agents" aria-label={ctx.t("agents")}>
+        <div class="acp-agents-heading">
+          <h3 class="settings-section-title">{ctx.t("agents")}</h3>
+          <ctx.ui.Menu
+            trigger="button"
+            icon="plus"
+            label={ctx.t("add")}
+            disabled={settings() === undefined || pending() !== undefined}
+            items={[
+              ...PRESETS.map((preset) => {
+                const added = settings()?.agents.some(({ id }) => id === preset.id) === true;
+                return {
+                  label: added ? `${preset.name} · ${ctx.t("added")}` : preset.name,
+                  disabled: added,
+                  onSelect() {
+                    const server = selected();
+                    const current = settings();
+                    if (server !== undefined && current !== undefined) openForm(server, current.revision, preset);
+                  },
+                };
+              }),
+              { type: "separator" },
+              {
+                label: ctx.t("custom"),
                 onSelect() {
                   const server = selected();
                   const current = settings();
-                  if (server !== undefined && current !== undefined) openForm(server, current.revision, preset);
+                  if (server !== undefined && current !== undefined) openForm(server, current.revision);
                 },
-              };
-            }),
-            { type: "separator" },
-            {
-              label: ctx.t("custom"),
-              onSelect() {
-                const server = selected();
-                const current = settings();
-                if (server !== undefined && current !== undefined) openForm(server, current.revision);
               },
-            },
-          ]}
-        />
-      </div>
-      <Show
-        when={settings()}
-        fallback={
-          <ctx.ui.SettingsSection>
-            <ctx.ui.SettingsRow title={statusMessage() ?? <ctx.ui.Loader />} />
-          </ctx.ui.SettingsSection>
-        }
-      >
-        {(current: () => SettingsView) => (
-          <>
-            <ctx.ui.SettingsSection
-              footer={
-                <Show when={actionError()?.id === selectedID() ? actionError()?.text : undefined}>
-                  {(text: () => string) => <span role="alert">{text()}</span>}
+            ]}
+          />
+        </div>
+        <div data-component="settings-list" data-variant="catalog">
+          <Show
+            when={settings()}
+            fallback={
+              <div class="acp-agents-message" role="status">
+                <Show
+                  when={statusMessage()}
+                  fallback={
+                    <>
+                      <ctx.ui.Loader size="small" />
+                      {ctx.t("loading")}
+                    </>
+                  }
+                >
+                  {(text: () => string) => text()}
                 </Show>
-              }
-            >
-              <For each={agents} fallback={<ctx.ui.SettingsRow title={ctx.t("empty")} />}>
+              </div>
+            }
+          >
+            {(current: () => SettingsView) => (
+              <For each={agents} fallback={<div class="acp-agents-message">{ctx.t("empty")}</div>}>
                 {(agent) => {
                   const target = () => ({ revision: current().revision, id: agent.id });
+                  const command = () => [agent.command, ...agent.args].join(" ");
                   return (
                     <ctx.ui.SettingsRow
-                      title={agent.name}
+                      title={<bdi class="acp-agent-name">{agent.name}</bdi>}
                       description={
-                        <span>
-                          {[agent.command, ...agent.args].join(" ")}
+                        <>
+                          <code class="acp-agent-command" title={command()} dir="auto">
+                            {command()}
+                          </code>
                           <Show when={agent.failure !== ""}>
-                            <br />
-                            {ctx.t(`failure.${agent.failure}`)}
+                            <span class="acp-agent-failure">{ctx.t(`failure.${agent.failure}`)}</span>
                           </Show>
-                        </span>
+                        </>
                       }
                     >
-                      <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                        <span aria-live="polite">
+                      <div class="acp-agent-actions">
+                        <span class="acp-agent-status" data-status={agent.status} role="status">
+                          <Show
+                            when={agent.status === "discovering"}
+                            fallback={<span class="acp-agent-dot" aria-hidden="true" />}
+                          >
+                            <ctx.ui.Loader size="small" class="acp-agent-loader" />
+                          </Show>
                           {ctx.t(`status.${agent.status}`)}
                           {agent.modelCount > 0 ? ` · ${ctx.t("modelCount", { count: agent.modelCount })}` : ""}
                         </span>
@@ -463,23 +556,34 @@ function Settings() {
                   );
                 }}
               </For>
-            </ctx.ui.SettingsSection>
-            <ctx.ui.SettingsSection>
-              <ctx.ui.SettingsRow id="acp-log" title={ctx.t("logLevel")}>
-                <ctx.ui.Select
-                  label={ctx.t("logLevel")}
-                  value={current().logLevel}
-                  options={LOG_LEVELS.map((level) => ({ label: level, value: level }))}
-                  disabled={pending() !== undefined}
-                  onChange={(logLevel) => {
-                    const id = selectedID();
-                    if (id !== undefined)
-                      void act(id, (rpc) => rpc.setLogLevel({ revision: current().revision, logLevel }));
-                  }}
-                />
-              </ctx.ui.SettingsRow>
-            </ctx.ui.SettingsSection>
-          </>
+            )}
+          </Show>
+        </div>
+        <Show when={actionError()?.id === selectedID() ? actionError()?.text : undefined}>
+          {(text: () => string) => (
+            <span class="acp-error" role="alert">
+              {text()}
+            </span>
+          )}
+        </Show>
+      </section>
+      <Show when={settings()}>
+        {(current: () => SettingsView) => (
+          <ctx.ui.SettingsSection>
+            <ctx.ui.SettingsRow id="acp-log" title={ctx.t("logLevel")}>
+              <ctx.ui.Select
+                label={ctx.t("logLevel")}
+                value={current().logLevel}
+                options={LOG_LEVELS.map((level) => ({ label: level, value: level }))}
+                disabled={pending() !== undefined}
+                onChange={(logLevel) => {
+                  const id = selectedID();
+                  if (id !== undefined)
+                    void act(id, (rpc) => rpc.setLogLevel({ revision: current().revision, logLevel }));
+                }}
+              />
+            </ctx.ui.SettingsRow>
+          </ctx.ui.SettingsSection>
         )}
       </Show>
     </ctx.ui.SettingsLayout>
@@ -571,59 +675,81 @@ function AgentForm(props: {
         </>
       }
     >
-      <div style={{ display: "grid", gap: "12px" }}>
-        <div style={{ display: "grid", gap: "4px" }}>
-          <span>{ctx.t("name")}</span>
-          <ctx.ui.TextInput
-            label={ctx.t("name")}
-            value={name()}
-            onInput={setName}
-            onSubmit={() => void save()}
-            invalid={!!errorFor("name")}
-            disabled={saving()}
-            autofocus
-          />
+      <div class="acp-agent-form">
+        <div class="acp-form-field">
+          <label class="acp-form-label">
+            {ctx.t("name")}
+            <ctx.ui.TextInput
+              label={ctx.t("name")}
+              size="large"
+              value={name()}
+              onInput={setName}
+              onSubmit={() => void save()}
+              invalid={!!errorFor("name")}
+              disabled={saving()}
+              autofocus
+            />
+          </label>
           <Show when={errorFor("name")}>
-            <span role="alert">{errorFor("name")}</span>
+            {(text: () => string) => (
+              <span class="acp-error" role="alert">
+                {text()}
+              </span>
+            )}
           </Show>
         </div>
         <Show when={!props.preset}>
-          <div style={{ display: "grid", gap: "4px" }}>
-            <span>{ctx.t("id")}</span>
-            <ctx.ui.TextInput
-              label={ctx.t("id")}
-              value={id()}
-              onInput={setID}
-              onSubmit={() => void save()}
-              invalid={!!errorFor("id")}
-              disabled={!!props.agent || saving()}
-            />
-            <Show when={errorFor("id")} fallback={<small>{ctx.t("idHint")}</small>}>
-              <span role="alert">{errorFor("id")}</span>
+          <div class="acp-form-field">
+            <label class="acp-form-label">
+              {ctx.t("id")}
+              <ctx.ui.TextInput
+                label={ctx.t("id")}
+                size="large"
+                value={id()}
+                onInput={setID}
+                onSubmit={() => void save()}
+                invalid={!!errorFor("id")}
+                disabled={!!props.agent || saving()}
+              />
+            </label>
+            <Show when={errorFor("id")} fallback={<span class="acp-form-hint">{ctx.t("idHint")}</span>}>
+              {(text: () => string) => (
+                <span class="acp-error" role="alert">
+                  {text()}
+                </span>
+              )}
             </Show>
           </div>
         </Show>
-        <div style={{ display: "grid", gap: "4px" }}>
-          <span>{ctx.t("command")}</span>
-          <ctx.ui.TextInput
-            label={ctx.t("command")}
-            value={command()}
-            onInput={setCommand}
-            onSubmit={() => void save()}
-            invalid={!!errorFor("command")}
-            disabled={saving()}
-          />
+        <div class="acp-form-field">
+          <label class="acp-form-label">
+            {ctx.t("command")}
+            <ctx.ui.TextInput
+              label={ctx.t("command")}
+              size="large"
+              value={command()}
+              onInput={setCommand}
+              onSubmit={() => void save()}
+              invalid={!!errorFor("command")}
+              disabled={saving()}
+            />
+          </label>
           <Show when={errorFor("command")}>
-            <span role="alert">{errorFor("command")}</span>
+            {(text: () => string) => (
+              <span class="acp-error" role="alert">
+                {text()}
+              </span>
+            )}
           </Show>
         </div>
-        <div style={{ display: "grid", gap: "4px", "justify-items": "start" }}>
-          <span>{ctx.t("args")}</span>
+        <fieldset class="acp-form-field acp-form-group">
+          <legend>{ctx.t("args")}</legend>
           <Index each={args()}>
             {(arg, index) => (
-              <div style={{ display: "grid", "grid-template-columns": "1fr auto", gap: "8px", width: "100%" }}>
+              <div class="acp-form-row">
                 <ctx.ui.TextInput
                   label={ctx.t("arg", { number: index + 1 })}
+                  size="large"
                   value={arg()}
                   onInput={(value) => setArgs((list) => list.with(index, value))}
                   disabled={saving()}
@@ -647,16 +773,21 @@ function AgentForm(props: {
             {ctx.t("addArg")}
           </ctx.ui.Button>
           <Show when={errorFor("args")}>
-            <span role="alert">{errorFor("args")}</span>
+            {(text: () => string) => (
+              <span class="acp-error" role="alert">
+                {text()}
+              </span>
+            )}
           </Show>
-        </div>
-        <div style={{ display: "grid", gap: "4px", "justify-items": "start" }}>
-          <span>{ctx.t("env")}</span>
+        </fieldset>
+        <fieldset class="acp-form-field acp-form-group">
+          <legend>{ctx.t("env")}</legend>
           <Index each={env()}>
             {(row, index) => (
-              <div style={{ display: "grid", "grid-template-columns": "1fr 1.5fr auto", gap: "8px", width: "100%" }}>
+              <div class="acp-form-row acp-form-row-env">
                 <ctx.ui.TextInput
                   label={ctx.t("envKey")}
+                  size="large"
                   placeholder={ctx.t("envKey")}
                   value={row().key}
                   onInput={(key) => setEnv((list) => list.with(index, { ...row(), key }))}
@@ -665,6 +796,7 @@ function AgentForm(props: {
                 <ctx.ui.TextInput
                   label={ctx.t("envValue")}
                   type="password"
+                  size="large"
                   placeholder={row().savedKey === row().key ? ctx.t("envSaved") : ctx.t("envValue")}
                   value={row().value ?? ""}
                   onInput={(value) => setEnv((list) => list.with(index, { ...row(), value }))}
@@ -689,11 +821,17 @@ function AgentForm(props: {
             {ctx.t("addEnv")}
           </ctx.ui.Button>
           <Show when={errorFor("env")}>
-            <span role="alert">{errorFor("env")}</span>
+            {(text: () => string) => (
+              <span class="acp-error" role="alert">
+                {text()}
+              </span>
+            )}
           </Show>
-        </div>
+        </fieldset>
         <Show when={error()?.field === undefined && error() !== undefined}>
-          <span role="alert">{ctx.t(`error.${error()?.status}`)}</span>
+          <span class="acp-error" role="alert">
+            {ctx.t(`error.${error()?.status}`)}
+          </span>
         </Show>
       </div>
     </ctx.ui.Dialog>

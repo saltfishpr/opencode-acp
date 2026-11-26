@@ -1,0 +1,228 @@
+.acp-server-switcher[data-component="button-v2"] {
+  max-width: min(240px, calc(100vw - 48px));
+  min-width: 0;
+  padding-inline: 6px;
+}
+
+.acp-server-label {
+  flex-shrink: 0;
+  color: var(--v2-text-text-muted);
+  font-weight: 440;
+  white-space: nowrap;
+}
+
+.acp-server-name,
+.acp-agent-name,
+.acp-agent-command {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acp-server-chevron {
+  flex-shrink: 0;
+  color: var(--v2-icon-icon-muted);
+}
+
+.acp-server-dot {
+  display: grid;
+  flex: 0 0 16px;
+  width: 16px;
+  place-items: center;
+  color: var(--icon-critical-base);
+}
+
+.acp-server-dot[data-status="online"] {
+  color: var(--icon-success-base);
+}
+
+.acp-server-dot[data-status="incompatible"] {
+  color: var(--v2-state-fg-warning);
+}
+
+.acp-server-dot::before,
+.acp-agent-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.acp-server-menu[data-component="menu-v2-content"] {
+  min-width: min(220px, calc(100vw - 32px));
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: var(--kb-popper-content-available-height);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.acp-server-menu [data-component="menu-v2-item"] {
+  padding-inline-start: 8px;
+}
+
+.acp-server-option {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.acp-server-status {
+  flex-shrink: 0;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
+
+.acp-agents-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.acp-agents .settings-section-title {
+  margin: 0;
+}
+
+.acp-agents-heading > [data-component="button-v2"] {
+  height: 24px;
+  padding-inline: 9px;
+  border-radius: 4px;
+}
+
+.acp-agents [data-component="settings-row"] {
+  min-height: 48px;
+  padding-block: 10px;
+  row-gap: 6px;
+}
+
+.acp-agents [data-slot="settings-row-copy"] {
+  gap: 4px;
+}
+
+.acp-agents [data-slot="settings-row-description"] {
+  margin: 0;
+}
+
+.acp-agent-command {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.acp-agent-failure {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.acp-agent-actions,
+.acp-agent-status,
+.acp-agents-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.acp-agent-status,
+.acp-agents-message,
+.acp-form-hint {
+  color: var(--v2-text-text-muted);
+  font-weight: 440;
+  line-height: 16px;
+}
+
+.acp-agent-status,
+.acp-form-hint {
+  font-size: 12px;
+}
+
+.acp-agent-loader,
+.acp-agent-dot {
+  color: var(--v2-icon-icon-muted);
+}
+
+.acp-agent-status[data-status="ready"] .acp-agent-dot {
+  color: var(--icon-success-base);
+}
+
+.acp-agent-status[data-status="failed"] .acp-agent-dot {
+  color: var(--v2-state-fg-danger);
+}
+
+.acp-agent-status[data-status="missing"] .acp-agent-dot {
+  color: var(--v2-state-fg-warning);
+}
+
+.acp-agents-message {
+  padding-block: 20px;
+  font-size: 13px;
+}
+
+[data-component="dialog-v2"]:has(.acp-agent-form) [data-slot="dialog-container"] {
+  width: min(480px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
+}
+
+.acp-agent-form {
+  display: grid;
+  gap: 16px;
+  padding-block: 2px;
+}
+
+.acp-form-field,
+.acp-form-label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.acp-form-label,
+.acp-form-group > legend {
+  color: var(--v2-text-text-base);
+  font-size: 13px;
+  font-weight: 530;
+  line-height: 16px;
+}
+
+.acp-form-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.acp-form-group > legend {
+  padding: 0 0 6px;
+}
+
+.acp-form-group > [data-component="button-v2"] {
+  justify-self: start;
+}
+
+.acp-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.acp-form-row-env {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+}
+
+.acp-agent-form [data-component="text-input-v2"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.acp-error {
+  color: var(--v2-state-fg-danger);
+  font-size: 13px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
