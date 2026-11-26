@@ -27,6 +27,7 @@ flowchart LR
 ## 前置条件
 
 - OpenCode Desktop。插件在 server 端运行，但设置页是 Desktop 功能；web 端只在 Settings › Extensions 中列出插件，不显示插件页面。
+- Desktop 只从它自己启动的本地 server 加载插件页面（Settings › ACP 和「导入 ACP 会话」命令）。连接的其他服务器只需安装插件来提供模型和 ACP RPC，它们的插件页面不会被 Desktop 加载。
 - 使用 Antigravity 时，在目标服务器安装 Antigravity CLI，确保 `agy` 在 `PATH` 中，并在终端完成登录。
 - 如果当前网络访问模型目录需要代理，准备好代理地址，在 agent 配置的 `env` 中传入。
 - 当前实现基于 `@opencode/plugin` 2.4.1，并在同版本 OpenCode Desktop 上验证。
@@ -132,6 +133,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 | 回复里提示图片/音频未能保存       | 检查服务器上 `os.tmpdir()/opencode/opencode-acp/` 是否可写，以及内容是否超过大小上限                                      |
 | 导入列表为空                      | 确认 agent 声明了 `session/list` 和 `session/load`，且会话的工作目录在当前服务器上存在                                    |
 | 导入时提示不支持导入历史          | 升级服务器上的 OpenCode；`session.import` 是当前 2.4.x 的实验性接口                                                       |
+| Desktop 里看不到 Settings › ACP   | 在 Desktop 自己启动的本地 server 上安装插件；Desktop 只从该 server 加载插件页面，连接的其他服务器只运行 server 端         |
 | 需要更详细的日志                  | 在 Settings › ACP 将「日志级别」设为 `debug`，然后查看所选服务器日志                                                      |
 
 ## 开发
