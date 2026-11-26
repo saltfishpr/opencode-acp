@@ -95,7 +95,8 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 - 模型目录需要开一个短会话向 agent 采集；agent 不支持 `session/close` 时，会在 agent 侧留下一个空会话。
 - 图片以 base64 内联在 `session/prompt` 中转发，单张上限 5 MB（按解码后的原始字节计算）；超过上限或无法识别格式的图片会被忽略，并在回复中说明。
 - 是否接受图片由 agent `initialize` 响应中的 `agentCapabilities.promptCapabilities.image` 决定；未声明为 `true` 时模型不显示图片输入能力。`agy` 声明支持。
-- agent 回复中的图片，以及工具结果中的图片不会显示。
+- agent 回复中的图片会保存到服务器临时目录 `os.tmpdir()/opencode/opencode-acp/images/<sessionID>/`，并在回复正文中给出绝对路径，不会内联渲染；超过 5 MB 或无法解码的图片不会保存。
+- 工具结果中的图片不会显示。
 - 只针对 Desktop 验证；TUI 未适配。
 - OpenCode 的 revert / snapshot 对远端 agent 的改动无效，需要撤销时使用 git。
 - 插件 API 不提供表单，`elicitation/create` 会被统一拒绝，并在助手正文中说明。
@@ -113,6 +114,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 | agent 进程意外退出                | 下一轮会自动重启；原始错误在 OpenCode server 日志的 `[acp]` 行中                                                          |
 | 提示 ACP 会话不存在或已失效       | 下一轮会新建会话，历史上下文不会自动恢复                                                                                  |
 | 贴图后提示已忽略图片              | 确认 agent 声明了 `promptCapabilities.image`，且所选模型本身支持图片；单张图片不能超过 5 MB                               |
+| 回复里提示图片未能保存            | 检查服务器上 `os.tmpdir()/opencode/opencode-acp/images/` 是否可写，以及图片是否超过 5 MB                                  |
 | 需要更详细的日志                  | 在 Settings › ACP 将「日志级别」设为 `debug`，然后查看所选服务器日志                                                      |
 
 ## 开发

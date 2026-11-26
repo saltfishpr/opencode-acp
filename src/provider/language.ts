@@ -16,6 +16,7 @@ import { logInfo, logWarn } from "../log.js";
 import type { SessionBindings } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
 import { lastUserPrompt, type PromptContent } from "./content.js";
+import { saveAgentImage } from "./images.js";
 import { ToolProjector } from "./projection.js";
 
 /** Model and thinking level chosen for one OpenCode turn. */
@@ -223,6 +224,11 @@ async function* turn(
       const update = item;
 
       if (update.sessionUpdate === "agent_message_chunk") {
+        if (update.content.type === "image") {
+          const saved = await saveAgentImage(sessionID, update.content.data, update.content.mimeType);
+          yield* say(saved === undefined ? "收到一张图片，但未能保存。" : `图片已保存：${saved}`);
+          continue;
+        }
         if (update.content.type !== "text" || update.content.text.length === 0) continue;
 
         yield* closeReasoning();
