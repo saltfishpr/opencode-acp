@@ -121,13 +121,12 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 ## 设置页
 
-打开 Settings › ACP agent，可以看到：
+打开 Settings › ACP，可以看到：
 
 - 每个已配置 agent 的状态：可用、未安装、已禁用或暂未接入。
 - CLI 的解析路径和 `--version` 输出。
-- agent 的默认模型、完整模型列表和当前上下文窗口。
 - agent 进程是否运行、PID，以及最近一次启动失败原因。
-- 插件的日志级别和上下文覆盖值。
+- 插件的日志级别。
 
 页面数据来自当前实际加载插件的 server。刷新按钮会重新读取。
 
