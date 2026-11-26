@@ -26,7 +26,9 @@ import {
   type AgentStatus,
   type ImportableAgent,
   type ImportableSession,
-  type ImportableView,
+  type ImportableSessionsInput,
+  type ImportAgentsView,
+  type ImportSessionsView,
   type ImportStatus,
   type MutationResult,
   type PrepareImportResult,
@@ -185,8 +187,11 @@ export default Plugin.define({
           return { status: "ok" };
         });
       },
-      importableSessions() {
-        return listImportableSessions(ctx, bindings);
+      importAgents() {
+        return Promise.resolve(listImportAgents());
+      },
+      importableSessions(input) {
+        return listImportableSessions(ctx, bindings, input as ImportableSessionsInput);
       },
       prepareImport(input) {
         const { agentID, sessionID } = input as { agentID: string; sessionID: string };
@@ -243,92 +248,99 @@ function settingsView(): SettingsView {
   };
 }
 
-async function listImportableSessions(ctx: Plugin.Context, bindings: SessionBindings): Promise<ImportableView> {
-  const agents: ImportableAgent[] = [];
-  const sessions: ImportableSession[] = [];
-  const live = new Map<string, boolean>();
+function listImportAgents(): ImportAgentsView {
+  return {
+    agents: state.config.agents.map((agent) => importAgentView(agent, running.get(agent.id))),
+  };
+}
 
-  for (const agent of state.config.agents) {
-    const active = running.get(agent.id);
-    const reason = unavailableReason(agent, active);
-    if (reason !== undefined || active === undefined) {
-      agents.push({ id: agent.id, name: agent.name, status: "unavailable", reason: reason ?? "notRunning" });
-      continue;
-    }
-    if ((active.catalog?.models.length ?? 0) === 0) {
-      agents.push({ id: agent.id, name: agent.name, status: "unavailable", reason: "noModels" });
-      continue;
-    }
+/** Describes one agent without starting it. */
+function importAgentView(agent: AgentConfig, active: AgentState | undefined): ImportableAgent {
+  const base = { id: agent.id, name: agent.name };
+  if (!agent.enabled) return { ...base, status: "disabled", reason: "disabled" };
+  if (active === undefined) return { ...base, status: "unavailable", reason: "notRunning" };
+  if (active.status === "discovering") return { ...base, status: "unavailable", reason: "discovering" };
+  if (active.status === "failed") return { ...base, status: "unavailable", reason: active.failure || "failed" };
+  if (!active.runtime.status.running)
+    return { ...base, status: "stopped", reason: active.runtime.status.exit !== undefined ? "exited" : "notRunning" };
+  if ((active.catalog?.models.length ?? 0) === 0) return { ...base, status: "unavailable", reason: "noModels" };
 
-    let client: AcpClient;
-    try {
-      client = await active.runtime.ensureClient();
-    } catch (error) {
-      logWarn("acp", `could not start ${agent.id} for session listing: ${message(error)}`);
-      agents.push({ id: agent.id, name: agent.name, status: "unavailable", reason: "failed" });
-      continue;
-    }
+  const capabilities = active.runtime.sessionCapabilities;
+  if (capabilities === undefined || !capabilities.list) return { ...base, status: "unsupported", reason: "noList" };
+  if (!capabilities.load) return { ...base, status: "unsupported", reason: "noLoad" };
+  return { ...base, status: "ready", reason: "" };
+}
 
-    if (!client.canListSessions) {
-      agents.push({ id: agent.id, name: agent.name, status: "unsupported", reason: "noList" });
-      continue;
-    }
-    if (!client.canLoadSession) {
-      agents.push({ id: agent.id, name: agent.name, status: "unsupported", reason: "noLoad" });
-      continue;
-    }
+async function listImportableSessions(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  input: ImportableSessionsInput,
+): Promise<ImportSessionsView> {
+  const agent = state.config.agents.find((item) => item.id === input.agentID);
+  if (agent === undefined) return { sessions: [] };
 
-    let listed: SessionInfo[];
+  const active = running.get(agent.id);
+  if (active === undefined || importAgentView(agent, active).status !== "ready") return { sessions: [] };
+
+  let client: AcpClient;
+  try {
+    client = await active.runtime.ensureClient();
+  } catch (error) {
+    logWarn("acp", `could not start ${agent.id} for session listing: ${message(error)}`);
+    return { sessions: [] };
+  }
+
+  let listed: SessionInfo[];
+  try {
+    listed = await client.listSessions(input.cwd);
+  } catch (error) {
+    logWarn("acp", `could not list ${agent.id} sessions: ${message(error)}`);
+    throw error;
+  }
+
+  // An agent may treat `cwd` as an exact match. Retry unfiltered so sessions in
+  // subdirectories still appear; the local filter below keeps the scope.
+  if (input.cwd !== undefined && listed.length === 0) {
     try {
       listed = await client.listSessions();
     } catch (error) {
       logWarn("acp", `could not list ${agent.id} sessions: ${message(error)}`);
-      agents.push({ id: agent.id, name: agent.name, status: "unavailable", reason: "listFailed" });
-      continue;
+      throw error;
     }
+  }
 
-    let entries: SessionBindingEntry[];
-    try {
-      entries = await bindings.list(agent.id);
-    } catch (error) {
-      logWarn("acp", `could not read ${agent.id} bindings: ${message(error)}`);
-      agents.push({ id: agent.id, name: agent.name, status: "unavailable", reason: "storageFailed" });
-      continue;
-    }
+  // Covers agents that ignore the `cwd` hint and sessions in subdirectories.
+  const scoped = input.cwd === undefined ? listed : listed.filter((info) => withinPath(info.cwd, input.cwd!));
 
-    const bound = new Map<string, string[]>();
-    for (const entry of entries) {
-      const ids = bound.get(entry.binding.sessionId) ?? [];
-      ids.push(entry.sessionID);
-      bound.set(entry.binding.sessionId, ids);
-    }
+  let entries: SessionBindingEntry[];
+  try {
+    entries = await bindings.list(agent.id);
+  } catch (error) {
+    logWarn("acp", `could not read ${agent.id} bindings: ${message(error)}`);
+    throw error;
+  }
 
-    for (const info of listed) {
-      const boundIDs = bound.get(info.sessionId);
-      if (boundIDs !== undefined) {
-        let isLive = false;
-        for (const opencodeID of boundIDs) {
-          const exists = live.get(opencodeID) ?? (await sessionExists(ctx, opencodeID));
-          live.set(opencodeID, exists);
-          if (exists) {
-            isLive = true;
-            break;
-          }
-        }
-        if (isLive) continue;
-      }
+  const bound = new Map<string, string[]>();
+  for (const entry of entries) {
+    const ids = bound.get(entry.binding.sessionId) ?? [];
+    ids.push(entry.sessionID);
+    bound.set(entry.binding.sessionId, ids);
+  }
 
-      sessions.push({
-        agentID: agent.id,
-        id: info.sessionId,
-        title: info.title?.trim() ?? "",
-        cwd: info.cwd,
-        updatedAt: info.updatedAt ?? "",
-        available: directoryExists(info.cwd),
-      });
-    }
+  const live = await liveSessions(ctx, scoped, bound);
 
-    agents.push({ id: agent.id, name: agent.name, status: "ready", reason: "" });
+  const sessions: ImportableSession[] = [];
+  for (const info of scoped) {
+    const boundIDs = bound.get(info.sessionId);
+    if (boundIDs !== undefined && boundIDs.some((id) => live.has(id))) continue;
+    sessions.push({
+      agentID: agent.id,
+      id: info.sessionId,
+      title: info.title?.trim() ?? "",
+      cwd: info.cwd,
+      updatedAt: info.updatedAt ?? "",
+      available: directoryExists(info.cwd),
+    });
   }
 
   sessions.sort((a, b) => {
@@ -339,7 +351,45 @@ async function listImportableSessions(ctx: Plugin.Context, bindings: SessionBind
     return l === r ? (a.title || a.cwd).localeCompare(b.title || b.cwd) : r - l;
   });
 
-  return { agents, sessions };
+  return { sessions };
+}
+
+/**
+ * OpenCode session IDs that still exist for the directories holding bound
+ * sessions. One list call per directory replaces one get per binding.
+ */
+async function liveSessions(
+  ctx: Plugin.Context,
+  sessions: readonly SessionInfo[],
+  bound: ReadonlyMap<string, readonly string[]>,
+): Promise<ReadonlySet<string>> {
+  const live = new Set<string>();
+  const directories = new Set<string>();
+  for (const info of sessions) {
+    if (bound.has(info.sessionId)) directories.add(info.cwd);
+  }
+
+  for (const directory of directories) {
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      try {
+        const response = await ctx.session.list({
+          directory,
+          limit: 1000,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        for (const session of response.data) live.add(session.id);
+        const next = response.cursor.next ?? undefined;
+        if (next === undefined || next === cursor) break;
+        cursor = next;
+      } catch (error) {
+        logWarn("acp", `could not check OpenCode sessions in ${directory}: ${message(error)}`);
+        break;
+      }
+    }
+  }
+
+  return live;
 }
 
 async function prepareImport(
@@ -559,6 +609,18 @@ function directoryExists(directory: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Comparable form of an absolute path, so `/a/` and `/a` match. */
+function pathKey(path: string): string {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function withinPath(target: string, root: string): boolean {
+  const key = pathKey(root);
+  const value = pathKey(target);
+  return key === "/" ? value.startsWith("/") : value === key || value.startsWith(`${key}/`);
 }
 
 function enqueue<T>(operation: () => Promise<T>): Promise<T> {

@@ -1,0 +1,321 @@
+/* Dialog chrome, inputs and buttons are supplied by the host. */
+[data-component="dialog-v2"]:has(.acp-import) [data-slot="dialog-container"] {
+  width: min(calc(100vw - 32px), 560px);
+  height: min(calc(100vh - 96px), 720px);
+}
+
+[data-slot="dialog-body"] > [data-scrollable]:has(> .acp-import) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.acp-import {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  color: var(--v2-text-text-base);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 16px;
+  letter-spacing: -0.04px;
+}
+
+.acp-import > [data-component="text-input-v2"] {
+  flex-shrink: 0;
+}
+
+.acp-import-scopes {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  padding-block: 8px;
+}
+
+.acp-scope {
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.acp-scope:hover:not(:disabled) {
+  background: var(--v2-overlay-simple-overlay-hover);
+  color: var(--v2-text-text-base);
+}
+
+.acp-scope:focus-visible {
+  outline: none;
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+.acp-scope[aria-pressed="true"] {
+  background: var(--v2-overlay-simple-overlay-pressed);
+  color: var(--v2-text-text-base);
+  font-weight: 530;
+}
+
+.acp-scope:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.acp-import-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 4px;
+  scrollbar-gutter: stable;
+}
+
+.acp-import-group + .acp-import-group {
+  margin-top: 8px;
+}
+
+.acp-import-project {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.acp-import-project:hover {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+.acp-import-project:focus-visible {
+  outline: none;
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+.acp-import-project > [data-slot="icon-svg"] {
+  flex-shrink: 0;
+  color: var(--v2-icon-icon-muted);
+}
+
+.acp-import-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.acp-import-project-name,
+.acp-import-directory,
+.acp-import-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acp-import-project-name {
+  color: var(--v2-text-text-base);
+  font-weight: 530;
+}
+
+.acp-import-directory {
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.acp-import-project-meta {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 32px;
+  gap: 8px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
+
+.acp-import-count {
+  flex-shrink: 0;
+  color: var(--v2-text-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.acp-import-server {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acp-import-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.acp-import-session {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  padding-inline-start: 56px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.acp-import-session:hover:not(:disabled) {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+.acp-import-session:focus-visible {
+  outline: none;
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+.acp-import-session:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.acp-import-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.acp-import-side {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.acp-import-time {
+  color: var(--v2-text-text-faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.acp-import-missing {
+  color: var(--v2-state-fg-warning);
+  font-size: 12px;
+}
+
+.acp-import-more {
+  align-self: start;
+  margin-inline-start: 56px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.acp-import-more:hover {
+  background: var(--v2-overlay-simple-overlay-hover);
+  color: var(--v2-text-text-base);
+}
+
+.acp-import-state {
+  display: flex;
+  min-height: 160px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--v2-text-text-muted);
+  text-align: center;
+}
+
+.acp-import-reading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
+
+.acp-import-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.acp-import-note {
+  margin: 0;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.acp-import-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px;
+}
+
+.acp-import-skeleton > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acp-import-skeleton span {
+  width: 62%;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--v2-overlay-simple-overlay-hover);
+  animation: acp-pulse 1.6s ease-in-out infinite;
+}
+
+.acp-import-skeleton span + span {
+  width: 40%;
+}
+
+@keyframes acp-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acp-import-skeleton span {
+    animation: none;
+  }
+}

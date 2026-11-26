@@ -20,6 +20,12 @@ export interface AgentPromptCapabilities {
   readonly audio: boolean;
 }
 
+/** Session endpoints the running process advertises. */
+export interface AgentSessionCapabilities {
+  readonly list: boolean;
+  readonly load: boolean;
+}
+
 /** What diagnostics can say about one agent without starting it. */
 export interface AgentRuntimeSnapshot {
   readonly running: boolean;
@@ -146,6 +152,13 @@ export class AgentRuntime {
 
   get lastFailure(): string | undefined {
     return this.failureMessage;
+  }
+
+  /** Empty until a process has been started. */
+  get sessionCapabilities(): AgentSessionCapabilities | undefined {
+    const client = this.client;
+    if (client === undefined || client.isClosed) return undefined;
+    return { list: client.canListSessions, load: client.canLoadSession };
   }
 
   close(): void {

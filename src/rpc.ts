@@ -37,7 +37,7 @@ export interface SettingsView {
   readonly agents: readonly AgentView[];
 }
 
-const IMPORT_AGENT_STATUS = ["ready", "unsupported", "unavailable"] as const;
+const IMPORT_AGENT_STATUS = ["ready", "stopped", "unsupported", "unavailable", "disabled"] as const;
 export type ImportAgentStatus = (typeof IMPORT_AGENT_STATUS)[number];
 
 export interface ImportableAgent {
@@ -56,9 +56,18 @@ export interface ImportableSession {
   readonly available: boolean;
 }
 
-export interface ImportableView {
+export interface ImportAgentsView {
   readonly agents: readonly ImportableAgent[];
+}
+
+export interface ImportSessionsView {
   readonly sessions: readonly ImportableSession[];
+}
+
+export interface ImportableSessionsInput {
+  readonly agentID: string;
+  /** Lists only this directory and its descendants when given. */
+  readonly cwd?: string;
 }
 
 const IMPORT_STATUS = [
@@ -257,15 +266,30 @@ export const AcpSettings = Rpc.define({
       },
       output: result,
     },
-    importableSessions: {
+    importAgents: {
       input: { type: "object", properties: {}, additionalProperties: false },
       output: {
         type: "object",
         properties: {
           agents: { type: "array", items: importableAgent },
+        },
+        required: ["agents"],
+        additionalProperties: false,
+      },
+    },
+    importableSessions: {
+      input: {
+        type: "object",
+        properties: { agentID: text, cwd: text },
+        required: ["agentID"],
+        additionalProperties: false,
+      },
+      output: {
+        type: "object",
+        properties: {
           sessions: { type: "array", items: importableSession },
         },
-        required: ["agents", "sessions"],
+        required: ["sessions"],
         additionalProperties: false,
       },
     },
