@@ -44,8 +44,8 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
         directory: (sessionID) => sessionDirectory(ctx, sessionID),
         titles: options.titles,
         requestPermission: options.requestPermission,
-        onTitle: (sessionID, title) => {
-          void applyAcpTitle(ctx, sessionID, title, firstPrompts.get(sessionID));
+        onTitle: (sessionID, title, previous) => {
+          void applyAcpTitle(ctx, sessionID, title, firstPrompts.get(sessionID), previous);
         },
         onContextWindow: (size) => options.onContextWindow(agent.runtime, size),
       },
@@ -77,6 +77,8 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
         const info = { ...Provider.Info.empty(id), name: agent.name, activation: "enabled" as const, package: PACKAGE };
         const limit = agent.runtime.status.contextWindow ?? DEFAULT_CONTEXT_LIMIT;
         const supportsImages = agent.runtime.status.supportsImages === true;
+        const supportsAudio = agent.runtime.status.supportsAudio === true;
+        const input = ["text", ...(supportsImages ? ["image"] : []), ...(supportsAudio ? ["audio"] : [])];
         const models = (agent.catalog?.models ?? []).map((entry) => {
           const defaults = Model.Info.default(id, Model.ID.make(entry.id));
           return {
@@ -85,7 +87,7 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
             limit: { context: limit, output: 32_000 },
             capabilities: {
               ...defaults.capabilities,
-              input: supportsImages ? ["text", "image"] : ["text"],
+              input,
             },
             // OpenCode reserves "default" for using the agent's own default level.
             variants: entry.thoughts.flatMap((thought) => {
@@ -122,11 +124,17 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
   return { registrations, occupied };
 }
 
-/** Only an untitled session or the first-prompt fallback may be replaced. */
-async function applyAcpTitle(ctx: Plugin.Context, sessionID: string, title: string, fallback: string | undefined) {
+/** Only an untitled session, the first-prompt fallback, or the previous ACP title may be replaced. */
+async function applyAcpTitle(
+  ctx: Plugin.Context,
+  sessionID: string,
+  title: string,
+  fallback: string | undefined,
+  previous: string | undefined,
+) {
   try {
     const session = await ctx.session.get({ sessionID });
-    if (session.title !== undefined && session.title !== fallback) return;
+    if (session.title !== undefined && session.title !== fallback && session.title !== previous) return;
     await ctx.session.update({ sessionID, title });
   } catch (error) {
     logWarn("acp", `could not apply ACP title: ${error instanceof Error ? error.message : String(error)}`);

@@ -37,6 +37,60 @@ export interface SettingsView {
   readonly agents: readonly AgentView[];
 }
 
+const IMPORT_AGENT_STATUS = ["ready", "unsupported", "unavailable"] as const;
+export type ImportAgentStatus = (typeof IMPORT_AGENT_STATUS)[number];
+
+export interface ImportableAgent {
+  readonly id: string;
+  readonly name: string;
+  readonly status: ImportAgentStatus;
+  readonly reason: string;
+}
+
+export interface ImportableSession {
+  readonly agentID: string;
+  readonly id: string;
+  readonly title: string;
+  readonly cwd: string;
+  readonly updatedAt: string;
+  readonly available: boolean;
+}
+
+export interface ImportableView {
+  readonly agents: readonly ImportableAgent[];
+  readonly sessions: readonly ImportableSession[];
+}
+
+const IMPORT_STATUS = [
+  "ok",
+  "notFound",
+  "unsupported",
+  "unavailable",
+  "alreadyBound",
+  "loadFailed",
+  "saveFailed",
+] as const;
+export type ImportStatus = (typeof IMPORT_STATUS)[number];
+
+export interface ImportPayloadView {
+  readonly info: Record<string, unknown>;
+  readonly messages: readonly Record<string, unknown>[];
+  readonly location: { readonly directory: string };
+}
+
+export interface PrepareImportResult {
+  readonly status: ImportStatus;
+  readonly sessionID: string;
+  readonly reason: string;
+  readonly payload?: ImportPayloadView;
+}
+
+export interface AbortImportInput {
+  readonly agentID: string;
+  readonly sessionID: string;
+  readonly opencodeSessionID: string;
+}
+
 const RESULTS = ["ok", "conflict", "busy", "invalid", "duplicate", "notFound", "saveFailed"] as const;
 export type MutationResult = { readonly status: (typeof RESULTS)[number]; readonly field?: string };
 
@@ -54,6 +108,74 @@ const target = {
   type: "object",
   properties: { revision, id: text },
   required: ["revision", "id"],
+  additionalProperties: false,
+} as const;
+
+const importableAgent = {
+  type: "object",
+  properties: {
+    id: text,
+    name: text,
+    status: { enum: IMPORT_AGENT_STATUS },
+    reason: text,
+  },
+  required: ["id", "name", "status", "reason"],
+  additionalProperties: false,
+} as const;
+
+const importableSession = {
+  type: "object",
+  properties: {
+    agentID: text,
+    id: text,
+    title: text,
+    cwd: text,
+    updatedAt: text,
+    available: { type: "boolean" },
+  },
+  required: ["agentID", "id", "title", "cwd", "updatedAt", "available"],
+  additionalProperties: false,
+} as const;
+
+const importPayload = {
+  type: "object",
+  properties: {
+    info: { type: "object", additionalProperties: true },
+    messages: { type: "array", items: { type: "object", additionalProperties: true } },
+    location: {
+      type: "object",
+      properties: { directory: text },
+      required: ["directory"],
+      additionalProperties: false,
+    },
+  },
+  required: ["info", "messages", "location"],
+  additionalProperties: false,
+} as const;
+
+const prepareImportResult = {
+  type: "object",
+  properties: {
+    status: { enum: IMPORT_STATUS },
+    sessionID: text,
+    reason: text,
+    payload: importPayload,
+  },
+  required: ["status", "sessionID", "reason"],
+  additionalProperties: false,
+} as const;
+
+const importTarget = {
+  type: "object",
+  properties: { agentID: text, sessionID: text },
+  required: ["agentID", "sessionID"],
+  additionalProperties: false,
+} as const;
+
+const abortImportInput = {
+  type: "object",
+  properties: { agentID: text, sessionID: text, opencodeSessionID: text },
+  required: ["agentID", "sessionID", "opencodeSessionID"],
   additionalProperties: false,
 } as const;
 
@@ -133,6 +255,26 @@ export const AcpSettings = Rpc.define({
         required: ["revision", "logLevel"],
         additionalProperties: false,
       },
+      output: result,
+    },
+    importableSessions: {
+      input: { type: "object", properties: {}, additionalProperties: false },
+      output: {
+        type: "object",
+        properties: {
+          agents: { type: "array", items: importableAgent },
+          sessions: { type: "array", items: importableSession },
+        },
+        required: ["agents", "sessions"],
+        additionalProperties: false,
+      },
+    },
+    prepareImport: {
+      input: importTarget,
+      output: prepareImportResult,
+    },
+    abortImport: {
+      input: abortImportInput,
       output: result,
     },
   },

@@ -14,6 +14,12 @@ export interface AgentState {
   failure: string;
 }
 
+/** Prompt content types an agent process accepts. */
+export interface AgentPromptCapabilities {
+  readonly images: boolean;
+  readonly audio: boolean;
+}
+
 /** What diagnostics can say about one agent without starting it. */
 export interface AgentRuntimeSnapshot {
   readonly running: boolean;
@@ -21,6 +27,7 @@ export interface AgentRuntimeSnapshot {
   readonly contextWindow: number | undefined;
   /** `undefined` until a process has reported its prompt capabilities. */
   readonly supportsImages: boolean | undefined;
+  readonly supportsAudio: boolean | undefined;
   readonly exit: AcpExit | undefined;
   readonly failure: FailureContext | undefined;
 }
@@ -38,13 +45,13 @@ export class AgentRuntime {
   private closed = false;
   private paused = false;
   private failureMessage: string | undefined;
-  private capabilities: boolean | undefined;
+  private capabilities: AgentPromptCapabilities | undefined;
 
   constructor(
     readonly agent: AgentConfig,
     readonly path: string,
     /** Called when a started process reports different prompt capabilities than the last one. */
-    private readonly onCapabilities?: (supportsImages: boolean) => void,
+    private readonly onCapabilities?: (capabilities: AgentPromptCapabilities) => void,
   ) {}
 
   /** Pauses new turns only if this process has no admitted turns. */
@@ -117,11 +124,11 @@ export class AgentRuntime {
    * capabilities, because the model catalog outlives individual processes.
    */
   private reportCapabilities(client: AcpClient): void {
-    const images = client.supportsImages;
-    if (images === this.capabilities) return;
+    const next = { images: client.supportsImages, audio: client.supportsAudio };
+    if (this.capabilities?.images === next.images && this.capabilities?.audio === next.audio) return;
 
-    this.capabilities = images;
-    this.onCapabilities?.(images);
+    this.capabilities = next;
+    this.onCapabilities?.(next);
   }
 
   get status(): AgentRuntimeSnapshot {
@@ -131,6 +138,7 @@ export class AgentRuntime {
       pid: client?.pid,
       contextWindow: client?.contextWindow,
       supportsImages: client === undefined || client.isClosed ? undefined : client.supportsImages,
+      supportsAudio: client === undefined || client.isClosed ? undefined : client.supportsAudio,
       exit: client?.exitInfo,
       failure: client?.failure,
     };

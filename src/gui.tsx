@@ -8,10 +8,11 @@ import {
   createResource,
   createSignal,
   onCleanup,
+  onMount,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Plugin, SettingsPage, Style, usePlugin, type ServerRef } from "@opencode/plugin/gui";
+import { Command, Plugin, SettingsPage, Style, usePlugin, type ServerRef } from "@opencode/plugin/gui";
 import css from "./gui.css?inline";
 import { LOG_LEVELS } from "./log.js";
 import {
@@ -20,7 +21,11 @@ import {
   PRESETS,
   type AgentInput,
   type AgentView,
+  type ImportableAgent,
+  type ImportableSession,
+  type ImportableView,
   type MutationResult,
+  type PrepareImportResult,
   type SettingsView,
 } from "./rpc.js";
 
@@ -99,6 +104,48 @@ const definition = Plugin.define({
       "field.command": "Enter an executable name or path.",
       "field.args": "Check the launch arguments.",
       "field.env": "Enter a unique environment variable name for each row.",
+      "import.command": "Import ACP session",
+      "import.commandDescription": "Import an existing session from an ACP agent",
+      "import.title": "Import ACP session",
+      "import.description": "Choose an existing session in an ACP agent that is not yet bound to OpenCode.",
+      "import.search": "Search title, agent or directory",
+      "import.loading": "Reading ACP sessions…",
+      "import.empty": "No sessions to import.",
+      "import.untitled": "Untitled session",
+      "import.cancel": "Cancel",
+      "import.refresh": "Refresh",
+      "import.directoryMissing": "Directory missing",
+      "import.noServers": "No connected server is available.",
+      "import.serverFailed": "Could not read ACP sessions from: {{servers}}",
+      "import.agentNote": "{{agent}} on {{server}}: {{reason}}",
+      "import.reason.disabled": "disabled",
+      "import.reason.notRunning": "not running",
+      "import.reason.discovering": "discovering models",
+      "import.reason.failed": "startup failed",
+      "import.reason.noList": "does not list sessions",
+      "import.reason.noLoad": "cannot load sessions",
+      "import.reason.listFailed": "could not list sessions",
+      "import.reason.storageFailed": "could not read session bindings",
+      "import.reason.busy": "busy",
+      "import.reason.noModels": "no models",
+      "import.age.now": "just now",
+      "import.age.minutes.one": "{{count}} minute ago",
+      "import.age.minutes.other": "{{count}} minutes ago",
+      "import.age.hours.one": "{{count}} hour ago",
+      "import.age.hours.other": "{{count}} hours ago",
+      "import.age.days.one": "{{count}} day ago",
+      "import.age.days.other": "{{count}} days ago",
+      "import.error.notFound": "This ACP session no longer exists.",
+      "import.error.unsupported": "This agent cannot list or load sessions.",
+      "import.error.unavailable": "This agent is not available. Check Settings › ACP.",
+      "import.error.alreadyBound": "This ACP session is already bound to an OpenCode session.",
+      "import.error.loadFailed": "Could not load this ACP session. Its history was not imported.",
+      "import.error.saveFailed": "Could not save the session binding.",
+      "import.error.directoryMissing": "The ACP session's working directory is not available on this server.",
+      "import.error.updatePlugin": "Update the ACP plugin on this server to import sessions.",
+      "import.error.updateOpenCode": "This OpenCode version does not support session import.",
+      "import.error.importFailed": "Could not import the session history.",
+      "import.error.requestFailed": "The request failed. Try again.",
     },
     zh: {
       title: "ACP",
@@ -173,6 +220,48 @@ const definition = Plugin.define({
       "field.command": "请输入可执行文件名或路径。",
       "field.args": "请检查启动参数。",
       "field.env": "每行请填写变量名，名称不能重复。",
+      "import.command": "导入 ACP 会话",
+      "import.commandDescription": "从 ACP agent 中导入已有会话",
+      "import.title": "导入 ACP 会话",
+      "import.description": "选择 ACP agent 中已有但尚未绑定到 OpenCode 的会话。",
+      "import.search": "搜索标题、agent 或目录",
+      "import.loading": "正在读取 ACP 会话…",
+      "import.empty": "没有可导入的会话。",
+      "import.untitled": "未命名会话",
+      "import.cancel": "取消",
+      "import.refresh": "刷新",
+      "import.directoryMissing": "目录不存在",
+      "import.noServers": "没有可用的服务器。",
+      "import.serverFailed": "无法读取以下服务器的 ACP 会话：{{servers}}",
+      "import.agentNote": "{{server}} 上的 {{agent}}：{{reason}}",
+      "import.reason.disabled": "已停用",
+      "import.reason.notRunning": "未运行",
+      "import.reason.discovering": "正在发现模型",
+      "import.reason.failed": "启动失败",
+      "import.reason.noList": "不支持列出会话",
+      "import.reason.noLoad": "不支持恢复会话",
+      "import.reason.listFailed": "无法列出会话",
+      "import.reason.storageFailed": "无法读取会话绑定",
+      "import.reason.busy": "正在使用",
+      "import.reason.noModels": "没有可用模型",
+      "import.age.now": "刚刚",
+      "import.age.minutes.one": "{{count}} 分钟前",
+      "import.age.minutes.other": "{{count}} 分钟前",
+      "import.age.hours.one": "{{count}} 小时前",
+      "import.age.hours.other": "{{count}} 小时前",
+      "import.age.days.one": "{{count}} 天前",
+      "import.age.days.other": "{{count}} 天前",
+      "import.error.notFound": "这个 ACP 会话已不存在。",
+      "import.error.unsupported": "该 agent 不支持列出或恢复会话。",
+      "import.error.unavailable": "该 agent 当前不可用，请在 Settings › ACP 中检查。",
+      "import.error.alreadyBound": "这个 ACP 会话已绑定到另一个 OpenCode 会话。",
+      "import.error.loadFailed": "无法加载该 ACP 会话，历史未导入。",
+      "import.error.saveFailed": "无法保存会话绑定。",
+      "import.error.directoryMissing": "该 ACP 会话的工作目录在服务器上不存在。",
+      "import.error.updatePlugin": "请更新此服务器上的 ACP 插件后再导入。",
+      "import.error.updateOpenCode": "当前 OpenCode 版本不支持导入会话历史。",
+      "import.error.importFailed": "无法导入会话历史。",
+      "import.error.requestFailed": "请求失败，请重试。",
     },
   },
 });
@@ -181,6 +270,22 @@ export default Plugin.define({
   ...definition,
   setup(ctx) {
     ctx.add(Style, css);
+    ctx.add(Command, () => ({
+      id: "import-session",
+      get title() {
+        return ctx.t("import.command");
+      },
+      get description() {
+        return ctx.t("import.commandDescription");
+      },
+      keywords: "ACP import session 导入 会话",
+      get group() {
+        return ctx.t("title");
+      },
+      run() {
+        ctx.dialogs.open((dialog) => <ImportSessions close={dialog.close} />);
+      },
+    }));
     ctx.add(SettingsPage, {
       id: "acp",
       get title() {
@@ -587,6 +692,308 @@ function Settings() {
         )}
       </Show>
     </ctx.ui.SettingsLayout>
+  );
+}
+
+type ImportRow = ImportableSession & { server: ServerRef; key: string };
+type AgentNote = ImportableAgent & { server: ServerRef; key: string };
+
+const importRowKey = (row: ImportRow) => row.key;
+
+function ImportSessions(props: { close(): void }) {
+  const ctx = usePlugin<typeof definition>();
+  const [query, setQuery] = createSignal("");
+  const [rows, setRows] = createStore<ImportRow[]>([]);
+  const [agents, setAgents] = createStore<AgentNote[]>([]);
+  const [loading, setLoading] = createSignal(true);
+  const [error, setError] = createSignal<string>();
+  const [pending, setPending] = createSignal<string>();
+  const [now, setNow] = createSignal(Date.now());
+  const controller = new AbortController();
+
+  onCleanup(() => controller.abort());
+  onMount(() => {
+    void load();
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    onCleanup(() => clearInterval(timer));
+  });
+
+  const targets = () =>
+    ctx.servers
+      .list()
+      .map((id) => ctx.servers.get(id))
+      .filter((server): server is ServerRef => server !== undefined && server.connected && server.compatible);
+
+  const names = createMemo(() => new Map(agents.map((agent) => [`${agent.server.id}\0${agent.id}`, agent.name])));
+  const nameOf = (serverID: string, agentID: string) => names().get(`${serverID}\0${agentID}`) ?? agentID;
+
+  const filtered = createMemo(() => {
+    const needle = query().trim().toLowerCase();
+    if (needle.length === 0) return rows;
+    return rows.filter((row) =>
+      [row.title, row.cwd, row.server.name, nameOf(row.server.id, row.agentID)].some((value) =>
+        value.toLowerCase().includes(needle),
+      ),
+    );
+  });
+
+  const notes = createMemo(() => agents.filter((agent) => agent.status !== "ready"));
+
+  const reasonText = (reason: string) => {
+    const failures = new Set(["login", "exited", "timeout", "spawn", "discovery", "noModels"]);
+    return failures.has(reason) ? ctx.t(`failure.${reason}`) : ctx.t(`import.reason.${reason}`);
+  };
+
+  const relativeTime = (value: string) => {
+    const parsed = Date.parse(value);
+    if (!Number.isFinite(parsed)) return "";
+    const seconds = Math.max(0, Math.floor((now() - parsed) / 1000));
+    if (seconds < 60) return ctx.t("import.age.now");
+    if (seconds < 3600) return ctx.plural("import.age.minutes", Math.floor(seconds / 60));
+    if (seconds < 86_400) return ctx.plural("import.age.hours", Math.floor(seconds / 3600));
+    return ctx.plural("import.age.days", Math.floor(seconds / 86_400));
+  };
+
+  async function load() {
+    setLoading(true);
+    setError(undefined);
+
+    const servers = targets();
+    if (servers.length === 0) {
+      setRows([]);
+      setAgents([]);
+      setError(ctx.t("import.noServers"));
+      setLoading(false);
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      servers.map(async (server) => ({
+        server,
+        view: (await server.client
+          .rpc(AcpSettings)
+          .importableSessions({}, { signal: AbortSignal.timeout(60_000) })) as ImportableView,
+      })),
+    );
+    if (controller.signal.aborted) return;
+
+    const nextRows: ImportRow[] = [];
+    const nextAgents: AgentNote[] = [];
+    const failed: string[] = [];
+
+    for (let index = 0; index < results.length; index++) {
+      const result = results[index];
+      const server = servers[index];
+      if (result === undefined || server === undefined) continue;
+      if (result.status === "rejected") {
+        failed.push(server.name);
+        continue;
+      }
+      for (const agent of result.value.view.agents) {
+        nextAgents.push({ ...agent, server, key: `${server.id}\0${agent.id}` });
+      }
+      for (const session of result.value.view.sessions) {
+        nextRows.push({
+          ...session,
+          server,
+          key: `${server.id}\0${session.agentID}\0${session.id}`,
+        });
+      }
+    }
+
+    setRows(reconcile(nextRows, { key: "key" }));
+    setAgents(reconcile(nextAgents, { key: "key" }));
+    if (failed.length > 0) setError(ctx.t("import.serverFailed", { servers: failed.join(", ") }));
+    setLoading(false);
+  }
+
+  async function importRow(row: ImportRow) {
+    if (pending() !== undefined || !row.available) return;
+
+    const key = importRowKey(row);
+    setPending(key);
+    setError(undefined);
+
+    let prepared: PrepareImportResult | undefined;
+    try {
+      const rpc = row.server.client.rpc(AcpSettings);
+      prepared = (await rpc.prepareImport(
+        { agentID: row.agentID, sessionID: row.id },
+        { signal: AbortSignal.timeout(120_000) },
+      )) as PrepareImportResult;
+
+      if (prepared.status !== "ok" || prepared.payload === undefined) {
+        setError(
+          prepared.status === "ok"
+            ? ctx.t("import.error.importFailed")
+            : prepared.status === "notFound" && prepared.reason === "directoryMissing"
+              ? ctx.t("import.error.directoryMissing")
+              : ctx.t(`import.error.${prepared.status}`),
+        );
+        if (prepared.status === "alreadyBound" || prepared.status === "notFound") void load();
+        return;
+      }
+
+      if (controller.signal.aborted) {
+        await rpc
+          .abortImport({
+            agentID: row.agentID,
+            sessionID: row.id,
+            opencodeSessionID: prepared.sessionID,
+          })
+          .catch(() => undefined);
+        return;
+      }
+
+      const importer = row.server.client.experimental?.session?.import;
+      if (typeof importer !== "function") {
+        await rpc
+          .abortImport({
+            agentID: row.agentID,
+            sessionID: row.id,
+            opencodeSessionID: prepared.sessionID,
+          })
+          .catch(() => undefined);
+        setError(ctx.t("import.error.updateOpenCode"));
+        return;
+      }
+
+      try {
+        await row.server.client.experimental.session.import(prepared.payload as never, {
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch {
+        await rpc
+          .abortImport({
+            agentID: row.agentID,
+            sessionID: row.id,
+            opencodeSessionID: prepared.sessionID,
+          })
+          .catch(() => undefined);
+        setError(ctx.t("import.error.importFailed"));
+        return;
+      }
+
+      if (controller.signal.aborted) return;
+      ctx.tabs.open({ server: row.server.id, id: prepared.sessionID }, { focus: true });
+      props.close();
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      const type = typeof cause === "object" && cause !== null && "type" in cause ? cause.type : undefined;
+      setError(
+        type === "rpc.method_not_found" ? ctx.t("import.error.updatePlugin") : ctx.t("import.error.requestFailed"),
+      );
+    } finally {
+      setPending(undefined);
+    }
+  }
+
+  return (
+    <ctx.ui.Dialog
+      title={ctx.t("import.title")}
+      description={ctx.t("import.description")}
+      size="large"
+      footer={
+        <>
+          <ctx.ui.Button variant="ghost" disabled={pending() !== undefined} onClick={props.close}>
+            {ctx.t("import.cancel")}
+          </ctx.ui.Button>
+          <ctx.ui.Button
+            variant="neutral"
+            icon="refresh"
+            busy={loading()}
+            disabled={loading() || pending() !== undefined}
+            onClick={() => void load()}
+          >
+            {ctx.t("import.refresh")}
+          </ctx.ui.Button>
+        </>
+      }
+    >
+      <div class="acp-import">
+        <ctx.ui.TextInput
+          label={ctx.t("import.search")}
+          placeholder={ctx.t("import.search")}
+          value={query()}
+          onInput={setQuery}
+          autofocus
+        />
+        <Show when={loading()}>
+          <div class="acp-import-state" role="status">
+            <ctx.ui.Loader size="small" />
+            {ctx.t("import.loading")}
+          </div>
+        </Show>
+        <Show when={!loading()}>
+          <Show when={error()}>
+            {(text: () => string) => (
+              <span class="acp-error" role="alert">
+                {text()}
+              </span>
+            )}
+          </Show>
+          <Show when={filtered().length > 0} fallback={<div class="acp-import-state">{ctx.t("import.empty")}</div>}>
+            <div class="acp-import-list" role="list">
+              <For each={filtered()}>
+                {(row) => {
+                  const key = importRowKey(row);
+                  return (
+                    <button
+                      type="button"
+                      class="acp-import-row"
+                      role="listitem"
+                      disabled={pending() !== undefined || !row.available}
+                      onClick={() => void importRow(row)}
+                    >
+                      <span class="acp-import-main">
+                        <span class="acp-import-title" dir="auto">
+                          {row.title || ctx.t("import.untitled")}
+                        </span>
+                        <span class="acp-import-meta-line">
+                          <span class="acp-import-server">{row.server.name}</span>
+                          <span class="acp-import-agent">{nameOf(row.server.id, row.agentID)}</span>
+                          <span class="acp-import-cwd" dir="ltr">
+                            {row.cwd}
+                          </span>
+                        </span>
+                      </span>
+                      <span class="acp-import-side">
+                        <Show
+                          when={row.available}
+                          fallback={<span class="acp-import-missing">{ctx.t("import.directoryMissing")}</span>}
+                        >
+                          <Show
+                            when={pending() === key}
+                            fallback={<span class="acp-import-time">{relativeTime(row.updatedAt)}</span>}
+                          >
+                            <ctx.ui.Loader size="small" />
+                          </Show>
+                        </Show>
+                      </span>
+                    </button>
+                  );
+                }}
+              </For>
+            </div>
+          </Show>
+          <Show when={notes().length > 0}>
+            <div class="acp-import-notes">
+              <For each={notes()}>
+                {(agent) => (
+                  <p class="acp-import-note">
+                    {ctx.t("import.agentNote", {
+                      server: agent.server.name,
+                      agent: agent.name,
+                      reason: reasonText(agent.reason),
+                    })}
+                  </p>
+                )}
+              </For>
+            </div>
+          </Show>
+        </Show>
+      </div>
+    </ctx.ui.Dialog>
   );
 }
 

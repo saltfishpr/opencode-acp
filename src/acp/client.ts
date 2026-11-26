@@ -12,6 +12,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
+  type SessionInfo,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
 import { declineElicitation, elicitationNotice, elicitationSession } from "../interaction/elicitation.js";
@@ -61,6 +62,13 @@ const CONFIG_TIMEOUT_MS = 15_000;
 /** Bound for `session/close` on the short-lived discovery session. */
 const CLOSE_TIMEOUT_MS = 5_000;
 
+/** Bound for one `session/list` page; agents may answer from local storage. */
+const LIST_TIMEOUT_MS = 60_000;
+
+/** Safety bounds for a cursor loop that never ends. */
+const LIST_PAGE_LIMIT = 50;
+const LIST_SESSION_LIMIT = 5_000;
+
 /**
  * One running ACP agent process plus its JSON-RPC connection.
  *
@@ -75,6 +83,8 @@ export class AcpClient {
   private readonly turns: Map<string, TurnState>;
   private readonly configs: Map<string, readonly SessionConfigOption[]>;
   private readonly loaded = new Set<string>();
+  /** Sessions whose replayed `session/load` updates are being collected. */
+  private readonly recorders: Map<string, SessionUpdate[]>;
   private readonly name: string;
   private readonly command: string;
   readonly initialize: InitializeResponse;
@@ -92,6 +102,7 @@ export class AcpClient {
     queues: Map<string, UpdateQueue>,
     turns: Map<string, TurnState>,
     configs: Map<string, readonly SessionConfigOption[]>,
+    recorders: Map<string, SessionUpdate[]>,
     name: string,
     command: string,
     usage: ContextWindow,
@@ -102,6 +113,7 @@ export class AcpClient {
     this.queues = queues;
     this.turns = turns;
     this.configs = configs;
+    this.recorders = recorders;
     this.name = name;
     this.command = command;
     this.usage = usage;
@@ -152,6 +164,7 @@ export class AcpClient {
     const queues = new Map<string, UpdateQueue>();
     const turns = new Map<string, TurnState>();
     const configs = new Map<string, readonly SessionConfigOption[]>();
+    const recorders = new Map<string, SessionUpdate[]>();
     const usage: ContextWindow = {};
 
     const app = client({ name: "opencode-acp" })
@@ -165,6 +178,7 @@ export class AcpClient {
           configs.set(params.sessionId, update.configOptions);
         }
 
+        recorders.get(params.sessionId)?.push(update);
         queues.get(params.sessionId)?.push(update);
       })
       .onRequest("session/request_permission", async ({ params }) => {
@@ -232,6 +246,7 @@ export class AcpClient {
         queues,
         turns,
         configs,
+        recorders,
         options.name,
         options.command,
         usage,
@@ -268,6 +283,11 @@ export class AcpClient {
     return this.initialize.agentCapabilities?.loadSession === true;
   }
 
+  /** Whether the agent advertises `session/list`. */
+  get canListSessions(): boolean {
+    return this.initialize.agentCapabilities?.sessionCapabilities?.list != null;
+  }
+
   /** Whether the agent advertises `session/close`, used to clean up discovery sessions. */
   get canCloseSession(): boolean {
     return this.initialize.agentCapabilities?.sessionCapabilities?.close != null;
@@ -281,6 +301,11 @@ export class AcpClient {
   /** Whether the agent accepts `image` content blocks. */
   get supportsImages(): boolean {
     return this.promptCapabilities?.image === true;
+  }
+
+  /** Whether the agent accepts `audio` content blocks. */
+  get supportsAudio(): boolean {
+    return this.promptCapabilities?.audio === true;
   }
 
   /** Whether the underlying process or connection has gone away. */
@@ -307,22 +332,65 @@ export class AcpClient {
     return response.sessionId;
   }
 
+  /** Lists the agent's stored sessions, following cursors up to a safety bound. */
+  async listSessions(cwd?: string): Promise<SessionInfo[]> {
+    if (this.isClosed) throw this.closedError();
+    if (!this.canListSessions) throw new Error("ACP agent does not support session/list");
+
+    const sessions: SessionInfo[] = [];
+    const seen = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | null | undefined;
+
+    for (let page = 0; page < LIST_PAGE_LIMIT; page++) {
+      const response = await this.connection.agent.request(
+        "session/list",
+        {
+          ...(cwd === undefined ? {} : { cwd }),
+          ...(cursor === undefined || cursor === null ? {} : { cursor }),
+        },
+        { cancellationSignal: AbortSignal.timeout(LIST_TIMEOUT_MS), stopWaitingOnCancel: true },
+      );
+
+      for (const session of response.sessions) {
+        if (seen.has(session.sessionId)) continue;
+        seen.add(session.sessionId);
+        sessions.push(session);
+        if (sessions.length >= LIST_SESSION_LIMIT) return sessions;
+      }
+
+      const next = response.nextCursor ?? null;
+      if (next === null || next === cursor || cursors.has(next)) return sessions;
+      cursors.add(next);
+      cursor = next;
+    }
+
+    return sessions;
+  }
+
   /**
-   * Loads an existing ACP session. History updates that the agent replays are
-   * dropped: they arrive before any prompt is running and are not part of the
-   * new turn.
+   * Loads an existing ACP session. Updates the agent replays are dropped unless
+   * `capture` is given, in which case they are appended to that array for
+   * history import.
    */
-  async loadSession(sessionId: string, cwd: string): Promise<void> {
+  async loadSession(sessionId: string, cwd: string, capture?: SessionUpdate[]): Promise<void> {
     if (this.isClosed) throw this.closedError();
 
-    const response = await this.connection.agent.request(
-      "session/load",
-      { sessionId, cwd, mcpServers: [] },
-      { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
-    );
+    if (capture !== undefined) this.recorders.set(sessionId, capture);
+    try {
+      const response = await this.connection.agent.request(
+        "session/load",
+        { sessionId, cwd, mcpServers: [] },
+        { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
+      );
 
-    this.configs.set(sessionId, response.configOptions ?? []);
-    this.loaded.add(sessionId);
+      this.configs.set(sessionId, response.configOptions ?? []);
+      this.loaded.add(sessionId);
+    } finally {
+      if (capture !== undefined && this.recorders.get(sessionId) === capture) {
+        this.recorders.delete(sessionId);
+      }
+    }
   }
 
   /** Latest configuration options reported for a session, or an empty list if none are known. */
@@ -543,6 +611,7 @@ export class AcpClient {
 
   private reset(): void {
     this.queues.clear();
+    this.recorders.clear();
     for (const turn of this.turns.values()) {
       if (!turn.controller.signal.aborted) turn.controller.abort();
       this.releasePending(turn);

@@ -16,6 +16,9 @@ flowchart LR
 - 每个模型带 thinking level 二级选择（如 Low / Medium / High / Extra），与 agent 的 `thought_level` 一一对应。
 - 正文和思考按流式输出。
 - 远端工具调用显示为 OpenCode 原生卡片：`bash`、`read` / `list`、`grep` / `glob`、`edit` / `write`（带 diff）、`webfetch`，其他工具使用 `acp_<name>` 通用卡。OpenCode 只渲染这些卡片，不会重复执行命令或修改文件。
+- 最新用户消息中的图片和音频会转成 ACP `image` / `audio` block 转发；agent 未声明对应能力时忽略并提示。
+- agent 回复中的图片和音频会保存到服务器临时目录，并在正文中给出路径。
+- 全局命令面板提供「导入 ACP 会话」，可以列出 ACP agent 中已有但未绑定到 OpenCode 的会话，并把历史导入为新的 OpenCode 会话。
 - 审批使用原生权限卡片，可以允许一次、始终允许或拒绝。
 - 会话映射保存在插件 storage 中。OpenCode server 重启后，下一轮通过 `session/load` 恢复远端上下文。
 - ACP 会话标题会成为 OpenCode 标题；token 统计包含 cache 和 reasoning；上下文窗口从 agent 的 `usage_update` 学习。
@@ -50,7 +53,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 ## 使用
 
 1. 在模型选择器中选择一个模型，需要时在旁边的二级菜单中选择 thinking level。
-2. 正常发送消息。只有最新一条用户消息的文本和图片会转发给 agent；OpenCode 的系统提示、历史消息、工具记录和图片以外的附件不会发送。
+2. 正常发送消息。只有最新一条用户消息的文本、图片和音频会转发给 agent；OpenCode 的系统提示、历史消息、工具记录和其他附件不会发送。agent 未声明 `promptCapabilities.image` / `promptCapabilities.audio` 时，对应内容会被忽略并在回复中说明。
 3. agent 自己决定调用哪些工具。工具卡和 diff 由 OpenCode 渲染，实际命令和文件操作在 agent 进程中执行。
 4. 需要审批时会出现原生权限卡：
    - **允许一次**：只放行当前请求。
@@ -75,6 +78,16 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 - OpenCode 会话与 ACP 会话的映射保存在插件 storage。server 重启后，下一轮会调用 `session/load`；加载失败时会新建 ACP 会话，并在回复中说明上下文未恢复。
 - agent 通过 `session_info_update` 报告的标题优先。如果 OpenCode 已经用首条消息生成了标题，ACP 标题到达后会替换它，除非用户手动重命名过会话。
 
+### 导入已有 ACP 会话
+
+1. 打开全局命令面板，运行「导入 ACP 会话」。
+2. 弹窗会并行读取所有已连接服务器上的 ACP agent，列出尚未绑定到现存 OpenCode 会话的会话。已绑定会话默认隐藏；如果对应的 OpenCode 会话已删除，绑定会视为陈旧并重新出现在列表里。
+3. 选择会话后，插件会调用 `session/load` 读取 agent 侧历史，把用户消息、助手文本、思考、工具卡片、通知和压缩摘要转换成 OpenCode 会话内容，然后创建新会话并打开标签页。
+4. 用户消息里的图片/音频会作为 OpenCode 原生附件导入；agent 和工具产生的图片/音频会按当前实时规则保存到服务器临时目录，并在正文中给出路径。
+5. 导入后模型优先使用 ACP 会话当前模型和 thinking level；找不到时回退到该 agent 的默认模型。下一轮对话通过已有绑定继续使用同一个 ACP 会话，远端上下文不会丢失。
+
+导入依赖 OpenCode 的实验性 session import 接口；服务器版本不支持时会在弹窗中提示。
+
 ### Token 与上下文
 
 - prompt 响应中的 usage 会映射为 input / output、cache 和 reasoning token；如果 agent 只发送 `usage_update`，则使用其中的已用 token 作为输入。
@@ -93,10 +106,12 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 ## 限制
 
 - 模型目录需要开一个短会话向 agent 采集；agent 不支持 `session/close` 时，会在 agent 侧留下一个空会话。
-- 图片以 base64 内联在 `session/prompt` 中转发，单张上限 5 MB（按解码后的原始字节计算）；超过上限或无法识别格式的图片会被忽略，并在回复中说明。
-- 是否接受图片由 agent `initialize` 响应中的 `agentCapabilities.promptCapabilities.image` 决定；未声明为 `true` 时模型不显示图片输入能力。`agy` 声明支持。
-- agent 回复中的图片会保存到服务器临时目录 `os.tmpdir()/opencode/opencode-acp/images/<sessionID>/`，并在回复正文中给出绝对路径，不会内联渲染；超过 5 MB 或无法解码的图片不会保存。
-- 工具结果中的图片不会显示。
+- 图片和音频以 base64 内联在 `session/prompt` 中转发；图片单张上限 5 MB，音频单段上限 20 MB（按解码后的原始字节计算）。超过上限或无法识别格式的附件会被忽略，并在回复中说明。
+- 是否接受图片/音频由 agent `initialize` 响应中的 `agentCapabilities.promptCapabilities.image` / `audio` 决定；未声明为 `true` 时模型不显示对应输入能力。`agy` 当前声明支持图片，不声明音频。
+- agent 回复中的图片和音频会保存到服务器临时目录 `os.tmpdir()/opencode/opencode-acp/images|audio/<sessionID>/`，并在回复正文中给出绝对路径，不会内联渲染；超过上限或无法解码的内容不会保存。
+- 实时工具结果中的图片/音频不会显示；导入历史时会保存工具结果里的图片/音频并给出路径。
+- 导入历史依赖 OpenCode 的实验性 session import 接口，按当前 2.4.x 实现。
+- 导入时用户附件会经过 server RPC 和 session import 两次传输，单次导入的附件总预算有限。
 - 只针对 Desktop 验证；TUI 未适配。
 - OpenCode 的 revert / snapshot 对远端 agent 的改动无效，需要撤销时使用 git。
 - 插件 API 不提供表单，`elicitation/create` 会被统一拒绝，并在助手正文中说明。
@@ -113,8 +128,10 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 | 提示找不到可执行文件              | 安装对应 CLI，或把 `command` 改成实际路径                                                                                 |
 | agent 进程意外退出                | 下一轮会自动重启；原始错误在 OpenCode server 日志的 `[acp]` 行中                                                          |
 | 提示 ACP 会话不存在或已失效       | 下一轮会新建会话，历史上下文不会自动恢复                                                                                  |
-| 贴图后提示已忽略图片              | 确认 agent 声明了 `promptCapabilities.image`，且所选模型本身支持图片；单张图片不能超过 5 MB                               |
-| 回复里提示图片未能保存            | 检查服务器上 `os.tmpdir()/opencode/opencode-acp/images/` 是否可写，以及图片是否超过 5 MB                                  |
+| 贴图/音频后提示已忽略             | 确认 agent 声明了 `promptCapabilities.image` / `audio`，且所选模型本身支持对应输入；图片不超过 5 MB，音频不超过 20 MB     |
+| 回复里提示图片/音频未能保存       | 检查服务器上 `os.tmpdir()/opencode/opencode-acp/` 是否可写，以及内容是否超过大小上限                                      |
+| 导入列表为空                      | 确认 agent 声明了 `session/list` 和 `session/load`，且会话的工作目录在当前服务器上存在                                    |
+| 导入时提示不支持导入历史          | 升级服务器上的 OpenCode；`session.import` 是当前 2.4.x 的实验性接口                                                       |
 | 需要更详细的日志                  | 在 Settings › ACP 将「日志级别」设为 `debug`，然后查看所选服务器日志                                                      |
 
 ## 开发

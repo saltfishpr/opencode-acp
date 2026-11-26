@@ -6,17 +6,8 @@ import type {
   LanguageModelV3TextPart,
 } from "@ai-sdk/provider";
 import { base64Bytes, normalizeBase64 } from "./base64.js";
-
-/** Common image APIs cap one image at 5 MB; larger payloads make one NDJSON line the agent must read. */
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
-const IMAGE_TYPES: Readonly<Record<string, string>> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-};
+import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES } from "./media.js";
+import { AUDIO_TYPES, IMAGE_TYPES, normalizeAudioType, normalizeImageType } from "./mime.js";
 
 /** The latest user message, converted to ACP content blocks. */
 export interface PromptContent {
@@ -29,8 +20,8 @@ export interface PromptContent {
 /**
  * Converts the latest user message to ACP content blocks.
  *
- * Only images are forwarded as attachments; other file parts are dropped with a
- * warning because the provider does not advertise them as inputs.
+ * Images and audio are forwarded as attachments; other file parts are dropped
+ * with a warning because the provider does not advertise them as inputs.
  */
 export function lastUserPrompt(prompt: LanguageModelV3Prompt): PromptContent {
   for (let index = prompt.length - 1; index >= 0; index--) {
@@ -43,7 +34,8 @@ export function lastUserPrompt(prompt: LanguageModelV3Prompt): PromptContent {
 
 function build(content: Array<LanguageModelV3TextPart | LanguageModelV3FilePart>): PromptContent {
   const blocks: ContentBlock[] = [];
-  const oversized: string[] = [];
+  const oversizedImages: string[] = [];
+  const oversizedAudio: string[] = [];
   const unreadable: string[] = [];
   const unsupported: string[] = [];
   let text: string[] = [];
@@ -65,7 +57,8 @@ function build(content: Array<LanguageModelV3TextPart | LanguageModelV3FilePart>
     flushText();
 
     const declared = part.mediaType.trim().toLowerCase();
-    if (!declared.startsWith("image/")) {
+    const kind = declared.startsWith("image/") ? "image" : declared.startsWith("audio/") ? "audio" : undefined;
+    if (kind === undefined) {
       unsupported.push(attachmentName(part));
       continue;
     }
@@ -76,29 +69,40 @@ function build(content: Array<LanguageModelV3TextPart | LanguageModelV3FilePart>
       continue;
     }
 
-    const mimeType = imageMediaType(declared, part, payload);
+    const mimeType =
+      kind === "image" ? imageMediaType(declared, part, payload) : audioMediaType(declared, part, payload);
     if (mimeType === undefined) {
       unreadable.push(attachmentName(part));
       continue;
     }
 
-    if (payload.bytes > MAX_IMAGE_BYTES) {
-      oversized.push(attachmentName(part));
+    if (payload.bytes > (kind === "image" ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES)) {
+      (kind === "image" ? oversizedImages : oversizedAudio).push(attachmentName(part));
       continue;
     }
 
-    blocks.push({ type: "image", data: payload.base64, mimeType });
+    if (kind === "image") blocks.push({ type: "image", data: payload.base64, mimeType });
+    else blocks.push({ type: "audio", data: payload.base64, mimeType });
   }
 
   flushText();
-  return { blocks, warnings: warningsOf(oversized, unreadable, unsupported) };
+  return {
+    blocks,
+    warnings: warningsOf(oversizedImages, oversizedAudio, unreadable, unsupported),
+  };
 }
 
-function warningsOf(oversized: string[], unreadable: string[], unsupported: string[]): string[] {
+function warningsOf(
+  oversizedImages: string[],
+  oversizedAudio: string[],
+  unreadable: string[],
+  unsupported: string[],
+): string[] {
   const warnings: string[] = [];
-  if (oversized.length > 0) warnings.push(`已忽略图片 ${list(oversized)}：超过 5 MB。`);
-  if (unreadable.length > 0) warnings.push(`已忽略图片 ${list(unreadable)}：无法读取图片数据。`);
-  if (unsupported.length > 0) warnings.push(`已忽略附件 ${list(unsupported)}：只转发图片附件。`);
+  if (oversizedImages.length > 0) warnings.push(`已忽略图片 ${list(oversizedImages)}：超过 5 MB。`);
+  if (oversizedAudio.length > 0) warnings.push(`已忽略音频 ${list(oversizedAudio)}：超过 20 MB。`);
+  if (unreadable.length > 0) warnings.push(`已忽略附件 ${list(unreadable)}：无法读取附件数据。`);
+  if (unsupported.length > 0) warnings.push(`已忽略附件 ${list(unsupported)}：只转发图片和音频附件。`);
   return warnings;
 }
 
@@ -122,10 +126,15 @@ function imageMediaType(declared: string, file: LanguageModelV3FilePart, payload
   return payload.mimeType === undefined ? undefined : normalizeImageType(payload.mimeType);
 }
 
-function normalizeImageType(value: string): string | undefined {
-  const type = value.trim().toLowerCase();
-  if (type === "image/jpg") return "image/jpeg";
-  return type.startsWith("image/") && type !== "image/*" ? type : undefined;
+/** Accepts concrete audio types; `audio/*` falls back to the filename or data URL header. */
+function audioMediaType(declared: string, file: LanguageModelV3FilePart, payload: Payload): string | undefined {
+  if (declared !== "audio/*" && declared !== "audio") return normalizeAudioType(declared);
+
+  const extension = file.filename?.split(".").pop()?.toLowerCase();
+  const byName = extension === undefined ? undefined : AUDIO_TYPES[extension];
+  if (byName !== undefined) return byName;
+
+  return payload.mimeType === undefined ? undefined : normalizeAudioType(payload.mimeType);
 }
 
 interface Payload {
