@@ -30,7 +30,14 @@ flowchart LR
 
 ## 安装
 
-插件目前以本地目录方式加载，没有发布到 npm。在 `opencode.json` 或 `opencode.jsonc` 的 `plugins` 中加入：
+插件目前以本地目录方式加载，没有发布到 npm。获取源码后，在插件目录（例如 `~/.config/opencode/plugins/opencode-acp`，也就是包含 `package.json` 的目录）安装依赖并构建 Desktop 设置页：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插件放在其他位置，或需要传入 `options`（例如为 `agy` 配置代理）时，在 `opencode.json` 或 `opencode.jsonc` 的 `plugins` 中加入：
 
 ```jsonc
 {
@@ -55,7 +62,7 @@ flowchart LR
 
 `package` 建议写绝对路径。上面的 `env` 只在需要代理时添加，请替换成实际代理地址。
 
-保存配置后重启 OpenCode 或重载插件。模型列表由插件在启动后向 agent 查询，首次查询完成时选择器会自动刷新。之后选择 Antigravity 下的任意模型即可开始对话。如果模型没有出现，先查看设置页中的 agent 状态，或参考下方“故障排查”。
+安装依赖并保存配置后，在 OpenCode 中执行 `/reload`。插件加载成功后会通过 `agy acp` 采集模型列表，首次查询完成时选择器会自动刷新。之后选择 Antigravity 下的任意模型即可开始对话。如果模型没有出现，参考下方“故障排查”。
 
 ### 配置项
 
@@ -63,20 +70,20 @@ flowchart LR
 
 每个 agent 支持以下字段：
 
-| 字段 | 说明 |
-|---|---|
-| `id` | provider ID，必须匹配 `^[a-z0-9][a-z0-9-]*$`。已知 ID 会继承 preset 的 `command`、`args`、`env` 和名称 |
-| `command` | 要启动的可执行文件；自定义 agent 必须提供 |
-| `args` | 启动参数，字符串数组 |
-| `env` | 传给 agent 进程的环境变量，代理通常写在这里 |
-| `name` | OpenCode 中显示的名称 |
-| `enabled` | 设为 `false` 时保留配置但不启动该 agent |
+| 字段      | 说明                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------ |
+| `id`      | provider ID，必须匹配 `^[a-z0-9][a-z0-9-]*$`。已知 ID 会继承 preset 的 `command`、`args`、`env` 和名称 |
+| `command` | 要启动的可执行文件；自定义 agent 必须提供                                                              |
+| `args`    | 启动参数，字符串数组                                                                                   |
+| `env`     | 传给 agent 进程的环境变量，代理通常写在这里                                                            |
+| `name`    | OpenCode 中显示的名称                                                                                  |
+| `enabled` | 设为 `false` 时保留配置但不启动该 agent                                                                |
 
 其他选项：
 
-| 选项 | 说明 |
-|---|---|
-| `logLevel` | `silent`、`error`、`warn`、`info`（默认）或 `debug`。`silent` 仍会输出 warning |
+| 选项           | 说明                                                                                           |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| `logLevel`     | `silent`、`error`、`warn`、`info`（默认）或 `debug`。`silent` 仍会输出 warning                 |
 | `contextLimit` | 正整数。覆盖写入模型目录的上下文窗口；不设置时由第一条 `usage_update` 决定，并重载一次模型目录 |
 
 ## 使用

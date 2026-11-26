@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@types/estree@1.0.11'
+  - '@types/node@22.20.7'
