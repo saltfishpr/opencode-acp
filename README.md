@@ -19,12 +19,12 @@ flowchart LR
 - 审批使用原生权限卡片，可以允许一次、始终允许或拒绝。
 - 会话映射保存在插件 storage 中。OpenCode server 重启后，下一轮通过 `session/load` 恢复远端上下文。
 - ACP 会话标题会成为 OpenCode 标题；token 统计包含 cache 和 reasoning；上下文窗口从 agent 的 `usage_update` 学习。
-- 桌面端设置页展示 agent 配置、CLI 检测、默认模型、模型列表、上下文窗口、进程状态和日志级别。
+- 桌面端设置页按服务器管理 ACP agent，显示启用状态和模型发现结果，并可调整日志级别。
 
 ## 前置条件
 
 - OpenCode Desktop。插件在 server 端运行，但设置页是 Desktop 功能；web 端只在 Settings › Extensions 中列出插件，不显示插件页面。
-- 已安装 Antigravity CLI，`agy` 在 `PATH` 中，并已在终端完成一次登录。
+- 使用 Antigravity 时，在目标服务器安装 Antigravity CLI，确保 `agy` 在 `PATH` 中，并在终端完成登录。
 - 如果当前网络访问模型目录需要代理，准备好代理地址，在 agent 配置的 `env` 中传入。
 - 当前实现基于 `@opencode/plugin` 2.4.1，并在同版本 OpenCode Desktop 上验证。
 
@@ -37,54 +37,15 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插件放在其他位置，或需要传入 `options`（例如为 `agy` 配置代理）时，在 `opencode.json` 或 `opencode.jsonc` 的 `plugins` 中加入：
+OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插件放在其他位置时，在 `opencode.json` 或 `opencode.jsonc` 的 `plugins` 中加入插件目录的绝对路径：
 
 ```jsonc
 {
-  "plugins": [
-    {
-      "package": "/absolute/path/to/opencode-acp",
-      "options": {
-        "agents": [
-          {
-            "id": "acp-agy",
-            "env": {
-              "HTTPS_PROXY": "http://127.0.0.1:7890",
-              "HTTP_PROXY": "http://127.0.0.1:7890"
-            }
-          }
-        ]
-      }
-    }
-  ]
+  "plugins": ["/absolute/path/to/opencode-acp"],
 }
 ```
 
-`package` 建议写绝对路径。上面的 `env` 只在需要代理时添加，请替换成实际代理地址。
-
-安装依赖并保存配置后，在 OpenCode 中执行 `/reload`。插件加载成功后会通过 `agy acp` 采集模型列表，首次查询完成时选择器会自动刷新。之后选择 Antigravity 下的任意模型即可开始对话。如果模型没有出现，参考下方“故障排查”。
-
-### 配置项
-
-`options.agents` 是 agent 列表。不写时使用内置 preset `acp-agy`。
-
-每个 agent 支持以下字段：
-
-| 字段      | 说明                                                                                                   |
-| --------- | ------------------------------------------------------------------------------------------------------ |
-| `id`      | provider ID，必须匹配 `^[a-z0-9][a-z0-9-]*$`。已知 ID 会继承 preset 的 `command`、`args`、`env` 和名称 |
-| `command` | 要启动的可执行文件；自定义 agent 必须提供                                                              |
-| `args`    | 启动参数，字符串数组                                                                                   |
-| `env`     | 传给 agent 进程的环境变量，代理通常写在这里                                                            |
-| `name`    | OpenCode 中显示的名称                                                                                  |
-| `enabled` | 设为 `false` 时保留配置但不启动该 agent                                                                |
-
-其他选项：
-
-| 选项           | 说明                                                                                           |
-| -------------- | ---------------------------------------------------------------------------------------------- |
-| `logLevel`     | `silent`、`error`、`warn`、`info`（默认）或 `debug`。`silent` 仍会输出 warning                 |
-| `contextLimit` | 正整数。覆盖写入模型目录的上下文窗口；不设置时由第一条 `usage_update` 决定，并重载一次模型目录 |
+安装后在 OpenCode Desktop 打开 **Settings › ACP**，按下文添加 agent。远端服务器也需要安装插件；agent 的 CLI、登录和可执行文件路径以所选服务器为准。
 
 ## 使用
 
@@ -97,6 +58,7 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
    - **拒绝**：结束当前 step，工具显示为已停止，整轮对话显示为已中断。
 
    审批卡没有单独的“取消”按钮。从外部中断整个会话时，挂起的 ACP 请求会被回复为 `cancelled`，对话正常结束。
+
 5. 点击停止会向 agent 发送 `session/cancel`，并结束当前流。
 
 ### 模型与 thinking level
@@ -117,18 +79,16 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 - prompt 响应中的 usage 会映射为 input / output、cache 和 reasoning token；如果 agent 只发送 `usage_update`，则使用其中的已用 token 作为输入。
 - ACP 的累计 cost 不会换算成 OpenCode 的模型价格。
-- 上下文窗口初始为 10,000,000，第一轮 `usage_update.size` 到达后更新为 agent 报告的值（`agy` 约为 1,048,576）。可以用 `contextLimit` 强制覆盖。
+- 上下文窗口初始为 10,000,000，第一轮 `usage_update.size` 到达后更新为 agent 报告的值（`agy` 约为 1,048,576）。
 
 ## 设置页
 
-打开 Settings › ACP，可以看到：
+1. 多台服务器可用时，使用右上角选择「此电脑」或目标服务器。配置保存在所选服务器上。
+2. 点击「添加 Agent」。选 Antigravity 会预填 `agy acp`；选 `Custom` 则填显示名称、Provider ID 和可执行文件。启动参数逐项填写，需要代理时在环境变量中添加 `HTTPS_PROXY` 或 `HTTP_PROXY`。
+3. 点击「保存并启用」。模型发现成功后，可以在所选服务器的模型选择器中使用该 agent。启动失败时可在对应行查看原因，并从「⋯」菜单重试。
+4. 从「⋯」菜单编辑、启用、停用或移除 agent。停用会保留配置；移除会删除配置，已有对话记录会保留。
 
-- 每个已配置 agent 的状态：可用、未安装或已禁用。
-- CLI 的解析路径和 `--version` 输出。
-- agent 进程是否运行、PID，以及最近一次启动失败原因。
-- 插件的日志级别。
-
-页面数据来自当前实际加载插件的 server。刷新按钮会重新读取。
+「日志级别」下拉框对所选服务器立即生效，默认 `info`。首次打开时没有已配置的 agent；旧文件中的插件 `options` 不再生效。只在由自己或信任的管理员控制的服务器上启用此插件，添加的可执行文件会以 OpenCode server 的账号运行。
 
 ## 限制
 
@@ -140,16 +100,16 @@ OpenCode 会自动发现 `~/.config/opencode/plugins/` 下的插件目录。插�
 
 ## 故障排查
 
-| 现象 | 处理 |
-|---|---|
+| 现象                              | 处理                                                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | 模型选择器里没有 `acp-agy` 的模型 | 首次启动后等待几秒，插件采集完模型目录会刷新；确认 `agy` 已安装且在 `PATH` 中；在设置页查看状态，或检查配置里的 `command` |
-| 模型列表为空且设置页提示采集失败 | 检查网络和 `agents[].env` 中的代理配置；已缓存的模型列表仍会显示 |
-| 第一轮卡住，约 60 秒后报握手超时 | 网络无法访问模型目录；在 `agents[].env` 中设置 `HTTPS_PROXY` / `HTTP_PROXY` |
-| 提示远端 agent 尚未登录或没有凭据 | 先在终端运行一次 Antigravity CLI 完成登录 |
-| 提示找不到可执行文件 | 安装对应 CLI，或把 `command` 改成实际路径 |
-| agent 进程意外退出 | 下一轮会自动重启；原始错误在 OpenCode server 日志的 `[acp]` 行中 |
-| 提示 ACP 会话不存在或已失效 | 下一轮会新建会话，历史上下文不会自动恢复 |
-| 需要更详细的日志 | 把 `logLevel` 设为 `debug`，然后查看 server 输出中的 `[acp]` 行 |
+| 模型列表为空且设置页提示采集失败  | 检查所选服务器的网络和 agent 表单中的代理环境变量，然后重试                                                               |
+| 第一轮卡住，约 60 秒后报握手超时  | 检查所选服务器是否能访问模型目录，必要时在 agent 表单中设置 `HTTPS_PROXY` / `HTTP_PROXY`                                  |
+| 提示远端 agent 尚未登录或没有凭据 | 先在终端运行一次 Antigravity CLI 完成登录                                                                                 |
+| 提示找不到可执行文件              | 安装对应 CLI，或把 `command` 改成实际路径                                                                                 |
+| agent 进程意外退出                | 下一轮会自动重启；原始错误在 OpenCode server 日志的 `[acp]` 行中                                                          |
+| 提示 ACP 会话不存在或已失效       | 下一轮会新建会话，历史上下文不会自动恢复                                                                                  |
+| 需要更详细的日志                  | 在 Settings › ACP 将「日志级别」设为 `debug`，然后查看所选服务器日志                                                      |
 
 ## 开发
 

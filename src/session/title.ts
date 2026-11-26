@@ -6,36 +6,36 @@
  * user prompt when the agent never names the session.
  */
 export class SessionTitles {
-  private readonly titles = new Map<string, string>()
-  private readonly limit: number
+  private readonly titles = new Map<string, string>();
+  private readonly limit: number;
 
   constructor(limit = 500) {
-    this.limit = limit
+    this.limit = limit;
   }
 
   /** Records a non-empty title. Returns true when it replaced a different value. */
   remember(sessionID: string, title: string): boolean {
-    const value = title.trim()
-    if (value.length === 0) return false
-    if (this.titles.get(sessionID) === value) return false
+    const value = title.trim();
+    if (value.length === 0) return false;
+    if (this.titles.get(sessionID) === value) return false;
 
-    this.titles.delete(sessionID)
-    this.titles.set(sessionID, value)
+    this.titles.delete(sessionID);
+    this.titles.set(sessionID, value);
 
     while (this.titles.size > this.limit) {
-      const oldest = this.titles.keys().next().value
-      if (oldest === undefined) break
-      this.titles.delete(oldest)
+      const oldest = this.titles.keys().next().value;
+      if (oldest === undefined) break;
+      this.titles.delete(oldest);
     }
 
-    return true
+    return true;
   }
 
   get(sessionID: string): string | undefined {
-    return this.titles.get(sessionID)
+    return this.titles.get(sessionID);
   }
 
   clear(): void {
-    this.titles.clear()
+    this.titles.clear();
   }
 }

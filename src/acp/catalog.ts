@@ -1,60 +1,54 @@
-import type {
-  SessionConfigOption,
-  SessionConfigSelect,
-  SessionConfigSelectGroup,
-  SessionConfigSelectOption,
-} from "@agentclientprotocol/sdk"
+import type { SessionConfigOption, SessionConfigSelect, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
+import { z } from "zod";
 
-/** One thinking level the agent offers for a model. */
-export type CatalogThought = {
-  readonly value: string
-  readonly name: string
-}
+const CatalogThoughtSchema = z
+  .object({
+    value: z.string(),
+    name: z.string(),
+  })
+  .readonly();
 
-/** One model the agent offers, with the thinking levels observed for it. */
-export type CatalogModel = {
-  readonly id: string
-  readonly name: string
-  readonly description?: string
-  readonly thoughts: readonly CatalogThought[]
-  /** `thought_level.currentValue` after selecting this model on a fresh session. */
-  readonly defaultThought?: string
-}
+const CatalogModelSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    description: z.string().optional(),
+    thoughts: z.array(CatalogThoughtSchema).readonly(),
+    /** `thought_level.currentValue` after selecting this model on a fresh session. */
+    defaultThought: z.string().optional(),
+  })
+  .readonly();
 
 /** The model catalog learned from an ACP session. */
-export type Catalog = {
-  readonly models: readonly CatalogModel[]
-  /** Model the agent selected when the discovery session was created. */
-  readonly defaultModel?: string
-}
+export const CatalogSchema = z
+  .object({
+    models: z.array(CatalogModelSchema).readonly(),
+    /** Model the agent selected when the discovery session was created. */
+    defaultModel: z.string().optional(),
+  })
+  .readonly();
 
-/** A select-type config option, narrowed from the protocol union. */
-export type SelectOption = SessionConfigSelect & {
-  readonly id: string
-  readonly name: string
-  readonly category?: string | null
-}
+export type CatalogModel = z.infer<typeof CatalogModelSchema>;
+export type Catalog = z.infer<typeof CatalogSchema>;
+
+export type SelectOption = Extract<SessionConfigOption, { type: "select" }>;
 
 /** Finds a `select` option by semantic category, such as `model` or `thought_level`. */
-export function selectOption(
-  options: readonly SessionConfigOption[] | null | undefined,
-  category: string,
-): SelectOption | undefined {
-  for (const option of options ?? []) {
-    if (option.type !== "select" || option.category !== category) continue
-    return option as SelectOption
+export function selectOption(options: readonly SessionConfigOption[], category: string): SelectOption | undefined {
+  for (const option of options) {
+    if (option.type === "select" && option.category === category) return option;
   }
-  return undefined
+  return undefined;
 }
 
 /** Flattens a select option's flat or grouped value list. */
 export function valuesOf(option: SessionConfigSelect | undefined): readonly SessionConfigSelectOption[] {
-  if (option === undefined) return []
+  if (option === undefined) return [];
 
-  const values: SessionConfigSelectOption[] = []
-  for (const item of option.options as ReadonlyArray<SessionConfigSelectOption | SessionConfigSelectGroup>) {
-    if ("group" in item) values.push(...item.options)
-    else values.push(item)
+  const values: SessionConfigSelectOption[] = [];
+  for (const item of option.options) {
+    if ("group" in item) values.push(...item.options);
+    else values.push(item);
   }
-  return values
+  return values;
 }

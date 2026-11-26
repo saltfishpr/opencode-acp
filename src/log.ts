@@ -1,24 +1,27 @@
-/** Verbosity of the plugin's own log lines. */
-export type LogLevel = "silent" | "error" | "warn" | "info" | "debug"
+export const LOG_LEVELS = ["silent", "error", "warn", "info", "debug"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
 
-const RANK: Record<LogLevel, number> = { silent: 0, error: 1, warn: 2, info: 3, debug: 4 }
+const RANK: Record<LogLevel, number> = { silent: 0, error: 1, warn: 2, info: 3, debug: 4 };
 
-let current: LogLevel = "info"
+const levelKey = Symbol.for("opencode-acp/log-level");
+const scope = globalThis as typeof globalThis & { [levelKey]?: LogLevel };
 
-/** Sets the threshold used by `logInfo` and `logDebug`. Warnings always print. */
 export function setLogLevel(level: LogLevel): void {
-  current = level
+  scope[levelKey] = level;
 }
 
 export function logDebug(prefix: string, message: string): void {
-  if (RANK[current] >= RANK.debug) console.log(`[${prefix}] ${message}`)
+  if (RANK[scope[levelKey] ?? "info"] >= RANK.debug) console.log(`[${prefix}] ${message}`);
 }
 
 export function logInfo(prefix: string, message: string): void {
-  if (RANK[current] >= RANK.info) console.log(`[${prefix}] ${message}`)
+  if (RANK[scope[levelKey] ?? "info"] >= RANK.info) console.log(`[${prefix}] ${message}`);
 }
 
-/** Warnings are diagnostics, so `silent` only suppresses informational lines. */
 export function logWarn(prefix: string, message: string): void {
-  console.warn(`[${prefix}] ${message}`)
+  if (RANK[scope[levelKey] ?? "info"] >= RANK.warn) console.warn(`[${prefix}] ${message}`);
+}
+
+export function logError(prefix: string, message: string): void {
+  if (RANK[scope[levelKey] ?? "info"] >= RANK.error) console.error(`[${prefix}] ${message}`);
 }
