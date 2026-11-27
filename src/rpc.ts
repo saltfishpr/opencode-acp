@@ -148,6 +148,32 @@ const SessionOptionsViewSchema = z.strictObject({
 });
 export type SessionOptionsView = z.infer<typeof SessionOptionsViewSchema>;
 
+const SessionCommandsStatusSchema = z.enum(["ok", "cached", "notAcp", "unavailable"]);
+export type SessionCommandsStatus = z.infer<typeof SessionCommandsStatusSchema>;
+
+const SessionCommandsViewSchema = z.strictObject({
+  status: SessionCommandsStatusSchema,
+  commands: z.array(SessionCommandViewSchema),
+});
+export type SessionCommandsView = z.infer<typeof SessionCommandsViewSchema>;
+
+const RunCommandStatusSchema = z.enum(["ok", "notAcp", "notFound", "unavailable", "failed"]);
+export type RunCommandStatus = z.infer<typeof RunCommandStatusSchema>;
+
+const RunCommandResultSchema = z.strictObject({
+  status: RunCommandStatusSchema,
+  message: z.string().optional(),
+});
+export type RunCommandResult = z.infer<typeof RunCommandResultSchema>;
+
+const RunCommandInputSchema = z.strictObject({
+  sessionID: z.string(),
+  name: z.string(),
+  input: z.string(),
+  delivery: z.enum(["steer", "queue"]).optional(),
+});
+export type RunCommandInput = z.infer<typeof RunCommandInputSchema>;
+
 const DeleteSessionInputSchema = z.strictObject({
   agentID: z.string(),
   sessionID: z.string(),
@@ -282,6 +308,14 @@ export const AcpSettings = Rpc.define({
     sessionOptions: {
       input: SessionOptionsInputSchema,
       output: SessionOptionsViewSchema,
+    },
+    sessionCommands: {
+      input: SessionOptionsInputSchema,
+      output: SessionCommandsViewSchema,
+    },
+    runCommand: {
+      input: RunCommandInputSchema,
+      output: RunCommandResultSchema,
     },
     setSessionOption: {
       input: SetSessionOptionInputSchema,

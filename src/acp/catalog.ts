@@ -1,4 +1,9 @@
-import type { SessionConfigOption, SessionConfigSelect, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
+import type {
+  AvailableCommand,
+  SessionConfigOption,
+  SessionConfigSelect,
+  SessionConfigSelectOption,
+} from "@agentclientprotocol/sdk";
 import { z } from "zod";
 
 const CatalogThoughtSchema = z
@@ -19,17 +24,37 @@ const CatalogModelSchema = z
   })
   .readonly();
 
-/** The model catalog learned from an ACP session. */
+const CatalogCommandSchema = z
+  .object({
+    name: z.string(),
+    description: z.string(),
+    hint: z.string().optional(),
+  })
+  .readonly();
+
+/** The model and command catalog learned from an ACP session. */
 export const CatalogSchema = z
   .object({
     models: z.array(CatalogModelSchema).readonly(),
     /** Model the agent selected when the discovery session was created. */
     defaultModel: z.string().optional(),
+    /** Commands the agent advertised during discovery, used until a session reports its own. */
+    commands: z.array(CatalogCommandSchema).readonly().default([]),
   })
   .readonly();
 
+export type CatalogCommand = z.infer<typeof CatalogCommandSchema>;
 export type CatalogModel = z.infer<typeof CatalogModelSchema>;
 export type Catalog = z.infer<typeof CatalogSchema>;
+
+/** The part of each advertised command kept for the catalog and the client. */
+export function catalogCommands(commands: readonly AvailableCommand[]): CatalogCommand[] {
+  return commands.map((command) => ({
+    name: command.name,
+    description: command.description,
+    ...(command.input == null ? {} : { hint: command.input.hint }),
+  }));
+}
 
 export type SelectOption = Extract<SessionConfigOption, { type: "select" }>;
 

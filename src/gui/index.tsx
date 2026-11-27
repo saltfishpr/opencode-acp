@@ -9,6 +9,8 @@ import {
   type PanelTab,
 } from "@opencode/plugin/gui";
 import css from "../gui.css?inline";
+import { createSessionCommands } from "./client/commands.js";
+import { isAcpSession } from "./client/session.js";
 import { definition } from "./definition.js";
 import { startElicitationBridge } from "./elicitation/bridge.js";
 import { ImportSessions } from "./import/index.js";
@@ -21,6 +23,7 @@ export default Plugin.define({
   setup(ctx) {
     const stopElicitations = startElicitationBridge(ctx);
     ctx.add(Style, `${css}\n${sessionsCss}`);
+    createSessionCommands(ctx);
 
     const optionsTab: PanelTab = {
       id: "options",
@@ -30,9 +33,12 @@ export default Plugin.define({
       closable: "hover",
     };
     const optionsKey = `${ctx.id}:${optionsTab.id}`;
-    const currentSession = () => ctx.sessions.current();
+    const acpSession = () => {
+      const session = ctx.sessions.current();
+      return session !== undefined && isAcpSession(session) ? session : undefined;
+    };
     const openOptions = () => {
-      const session = currentSession();
+      const session = acpSession();
       if (session !== undefined) ctx.layout.open(optionsKey, session);
     };
 
@@ -48,22 +54,26 @@ export default Plugin.define({
         kind: "tab",
         order: 0,
       },
-      list: (input) => (input.open.includes(optionsTab.id) ? [optionsTab] : []),
+      list: (input) => (input.open.includes(optionsTab.id) && isAcpSession(input.session) ? [optionsTab] : []),
       render: (props) => <SessionOptions session={props.session} />,
     });
-    ctx.add(MenuItem, (): MenuItemType => ({
-      menu: "session.panel",
-      id: "session-options",
-      get title() {
-        return ctx.t("session.open");
-      },
-      icon: "sliders",
-      get opened() {
-        const session = currentSession();
-        return session !== undefined && ctx.layout.state(optionsKey, session) !== "closed";
-      },
-      run: openOptions,
-    }));
+    ctx.add(MenuItem, (): MenuItemType | undefined => {
+      const session = acpSession();
+      if (session === undefined) return undefined;
+
+      return {
+        menu: "session.panel",
+        id: "session-options",
+        get title() {
+          return ctx.t("session.open");
+        },
+        icon: "sliders",
+        get opened() {
+          return ctx.layout.state(optionsKey, session) !== "closed";
+        },
+        run: openOptions,
+      };
+    });
     ctx.add(Command, () => ({
       id: "session-options",
       get title() {
@@ -77,7 +87,7 @@ export default Plugin.define({
         return ctx.t("title");
       },
       get enabled() {
-        return currentSession() !== undefined;
+        return acpSession() !== undefined;
       },
       run: openOptions,
     }));

@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin";
 import { statSync } from "node:fs";
 import { AcpStartError } from "./acp/errors.js";
 import { AcpClient } from "./acp/client.js";
-import { selectOption, valuesOf, type Catalog } from "./acp/catalog.js";
+import { catalogCommands, selectOption, valuesOf, type Catalog } from "./acp/catalog.js";
 import { AgentRuntime, findExecutable, type AgentState } from "./acp/runtime.js";
 import { restoreSession } from "./acp/session.js";
 import {
@@ -19,7 +19,8 @@ import { PermissionBroker } from "./interaction/permission.js";
 import { ElicitationBroker } from "./interaction/elicitation.js";
 import { logError, logInfo, logWarn, setLogLevel } from "./log.js";
 import { clearCatalog, loadCatalog, saveCatalog } from "./provider/catalog.js";
-import { PACKAGE, registerProviders } from "./provider/register.js";
+import { PACKAGE } from "./provider/constants.js";
+import { registerProviders } from "./provider/register.js";
 import {
   AcpSettings,
   AGENT_ID,
@@ -34,6 +35,9 @@ import {
   type ImportStatus,
   type MutationResult,
   type PrepareImportResult,
+  type RunCommandInput,
+  type RunCommandResult,
+  type SessionCommandsView,
   type SessionOptionView,
   type SessionOptionsView,
   type SettingsView,
@@ -205,6 +209,12 @@ export default Plugin.define({
       },
       sessionOptions({ sessionID }) {
         return readSessionOptions(ctx, bindings, sessionID);
+      },
+      sessionCommands({ sessionID }) {
+        return peekAcpSession(ctx, bindings, sessionID);
+      },
+      runCommand(input) {
+        return runAcpCommand(ctx, bindings, input);
       },
       setSessionOption({ sessionID, configID, value }) {
         return applySessionOption(ctx, bindings, sessionID, configID, value);
@@ -706,6 +716,75 @@ async function resolveAcpSession(
   return { client, sessionId: binding.sessionId };
 }
 
+/**
+ * Reads the commands an ACP session can run without replaying it. A session
+ * that is not loaded here uses the catalog learned from discovery, so opening
+ * the `/` menu never restores a conversation.
+ */
+async function peekAcpSession(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  sessionID: string,
+): Promise<SessionCommandsView> {
+  let providerID: string | undefined;
+  try {
+    const session = await ctx.session.get({ sessionID });
+    providerID = session.model?.providerID;
+  } catch {
+    return { status: "unavailable", commands: [] };
+  }
+
+  const agent = providerID === undefined ? undefined : state.config.agents.find((item) => item.id === providerID);
+  if (agent === undefined) return { status: "notAcp", commands: [] };
+
+  const current = availability(agent, running.get(agent.id));
+  if (current.phase !== "running") return { status: "unavailable", commands: [] };
+  const cached = [...(current.agent.catalog?.commands ?? [])];
+
+  let binding: AcpBinding | undefined;
+  try {
+    binding = await bindings.get(agent.id, sessionID);
+  } catch (error) {
+    logWarn("acp", `could not read the binding for ${sessionID}: ${message(error)}`);
+    return { status: "unavailable", commands: cached };
+  }
+  if (binding === undefined) return { status: "cached", commands: cached };
+
+  let client: AcpClient;
+  try {
+    client = await current.agent.runtime.ensureClient();
+  } catch (error) {
+    logWarn("acp", `could not start ${agent.id} for session commands: ${message(error)}`);
+    return { status: "unavailable", commands: [] };
+  }
+
+  if (!client.hasSession(binding.sessionId)) return { status: "cached", commands: cached };
+  return { status: "ok", commands: catalogCommands(client.commands(binding.sessionId)) };
+}
+
+async function runAcpCommand(
+  ctx: Plugin.Context,
+  bindings: SessionBindings,
+  input: RunCommandInput,
+): Promise<RunCommandResult> {
+  const peeked = await peekAcpSession(ctx, bindings, input.sessionID);
+  if (peeked.status === "notAcp" || peeked.status === "unavailable") return { status: peeked.status };
+  if (!peeked.commands.some((command) => command.name === input.name)) return { status: "notFound" };
+
+  const text = input.input.length === 0 ? `/${input.name}` : `/${input.name} ${input.input}`;
+  try {
+    await ctx.session.prompt({
+      sessionID: input.sessionID,
+      text,
+      ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
+    });
+    return { status: "ok" };
+  } catch (error) {
+    logWarn("acp", `could not run /${input.name} in ${input.sessionID}: ${message(error)}`);
+    return { status: "failed", message: message(error) };
+  }
+}
+
 async function deleteAgentSession(
   ctx: Plugin.Context,
   bindings: SessionBindings,
@@ -768,17 +847,8 @@ async function readSessionOptions(
   return {
     status: "ok",
     options: sessionOptionViews(resolved.client, resolved.sessionId),
-    commands: commandViews(resolved.client, resolved.sessionId),
+    commands: catalogCommands(resolved.client.commands(resolved.sessionId)),
   };
-}
-
-/** Commands the agent advertised for this session; read-only in the settings page. */
-function commandViews(client: AcpClient, sessionId: string) {
-  return client.commands(sessionId).map((command) => ({
-    name: command.name,
-    description: command.description,
-    ...(command.input == null ? {} : { hint: command.input.hint }),
-  }));
 }
 
 /** Combines config options with the legacy mode state into one list. */
