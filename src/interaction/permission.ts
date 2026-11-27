@@ -55,7 +55,6 @@ interface Target {
  */
 export class PermissionBroker {
   private readonly waiters = new Map<string, Waiter>();
-  private readonly ensured = new Map<string, Set<string>>();
   private readonly stop = new AbortController();
   private readonly hook: Promise<{ dispose(): Promise<void> } | undefined>;
 
@@ -197,27 +196,20 @@ export class PermissionBroker {
    * Adds one `ask` rule per action to the session. The rule is broad because
    * the action namespace belongs to remote ACP tools; resources stay concrete
    * so "always" only saves the values the user actually approved.
+   *
+   * Reads the rules on every request: another client can replace them, and a
+   * cached "already added" record would then let an approval pass unnoticed.
    */
   private async ensureAsk(sessionID: string, action: string): Promise<void> {
-    let actions = this.ensured.get(sessionID);
-    if (actions?.has(action) === true) return;
-
     const session = await this.ctx.session.get({ sessionID });
     const rules = session.permissions ?? [];
     const exists = rules.some((rule) => rule.action === action && rule.resource === "*" && rule.effect === "ask");
+    if (exists) return;
 
-    if (!exists) {
-      await this.ctx.session.update({
-        sessionID,
-        permissions: [...rules, { action, resource: "*", effect: "ask" }],
-      });
-    }
-
-    if (actions === undefined) {
-      actions = new Set();
-      this.ensured.set(sessionID, actions);
-    }
-    actions.add(action);
+    await this.ctx.session.update({
+      sessionID,
+      permissions: [...rules, { action, resource: "*", effect: "ask" }],
+    });
   }
 
   private async watch(): Promise<void> {
@@ -276,7 +268,7 @@ export class PermissionBroker {
     // The event stream can be down or the ask event can be missed; look the
     // request up directly so an interrupt still clears the native card.
     void this.rejectByLookup(waiter);
-    setTimeout(() => this.waiters.delete(waiter.nonce), 5_000);
+    setTimeout(() => this.waiters.delete(waiter.nonce), 5_000).unref();
   }
 
   private async rejectByLookup(waiter: Waiter): Promise<void> {
