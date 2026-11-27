@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "vite build",
+    "dev": "vite build --watch",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
