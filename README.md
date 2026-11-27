@@ -35,7 +35,7 @@ flowchart LR
 - Desktop 只从它自己启动的本地 server 加载插件页面（Settings › ACP 和「导入 ACP 会话」命令）。连接的其他服务器只需安装插件来提供模型和 ACP RPC，它们的插件页面不会被 Desktop 加载。
 - 使用 Antigravity 时，在目标服务器安装 Antigravity CLI，确保 `agy` 在 `PATH` 中，并在终端完成登录。
 - 如果当前网络访问模型目录需要代理，准备好代理地址，在 agent 配置的 `env` 中传入。
-- 当前实现基于 `@opencode/plugin` 2.4.1，并在同版本 OpenCode Desktop 上验证。
+- 当前实现基于 `@opencode/plugin` 2.4.x，并在 OpenCode Desktop 2.4.1 上验证。
 
 ## 安装
 
