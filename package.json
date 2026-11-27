@@ -14,12 +14,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "vite build",
     "dev": "vite build --watch",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "vite build"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.12.0",
