@@ -275,21 +275,50 @@ export default Plugin.define({
   },
 });
 
+type Availability =
+  | { readonly phase: "running"; readonly reason: ""; readonly exited: boolean; readonly agent: AgentState }
+  | {
+      readonly phase: "disabled" | "missing" | "discovering" | "failed" | "stopped";
+      readonly reason: string;
+      readonly exited: boolean;
+    };
+
+/**
+ * One view of whether an agent can take work, so the settings page, the import
+ * list and the import workflow do not each re-derive it.
+ */
+function availability(agent: AgentConfig, active: AgentState | undefined): Availability {
+  if (!agent.enabled) return { phase: "disabled", reason: "disabled", exited: false };
+  if (active === undefined) return { phase: "missing", reason: "notRunning", exited: false };
+
+  const exited = active.runtime.status.exit !== undefined;
+  if (active.status === "failed") {
+    return { phase: "failed", reason: active.failure || "failed", exited };
+  }
+  if (!active.runtime.status.running) {
+    return { phase: "stopped", reason: exited ? "exited" : "notRunning", exited };
+  }
+  if (active.status === "discovering") return { phase: "discovering", reason: "discovering", exited };
+  return { phase: "running", reason: "", exited, agent: active };
+}
+
 function settingsView(): SettingsView {
   const { config } = state;
   return {
     revision: config.revision,
     logLevel: config.logLevel,
-    agents: config.agents.map(({ id, name, command, args, env, enabled }) => {
+    agents: config.agents.map((agent) => {
+      const { id, name, command, args, env, enabled } = agent;
       const active = running.get(id);
-      const exited = active?.runtime.status.exit !== undefined;
-      const status: AgentStatus = !enabled
-        ? "disabled"
-        : active === undefined
-          ? "missing"
-          : exited
-            ? "failed"
-            : active.status;
+      const current = availability(agent, active);
+      const status: AgentStatus =
+        current.phase === "running"
+          ? "ready"
+          : current.phase === "stopped"
+            ? current.exited
+              ? "failed"
+              : (active?.status ?? "missing")
+            : current.phase;
       return {
         id,
         name,
@@ -299,7 +328,7 @@ function settingsView(): SettingsView {
         status,
         envKeys: Object.keys(env),
         modelCount: active?.catalog?.models.length ?? 0,
-        failure: active?.failure || (exited ? "exited" : ""),
+        failure: active?.failure || (current.exited ? "exited" : ""),
       };
     }),
   };
@@ -314,15 +343,22 @@ function listImportAgents(): ImportAgentsView {
 /** Describes one agent without starting it. */
 function importAgentView(agent: AgentConfig, active: AgentState | undefined): ImportableAgent {
   const base = { id: agent.id, name: agent.name };
-  if (!agent.enabled) return { ...base, status: "disabled", reason: "disabled" };
-  if (active === undefined) return { ...base, status: "unavailable", reason: "notRunning" };
-  if (active.status === "discovering") return { ...base, status: "unavailable", reason: "discovering" };
-  if (active.status === "failed") return { ...base, status: "unavailable", reason: active.failure || "failed" };
-  if (!active.runtime.status.running)
-    return { ...base, status: "stopped", reason: active.runtime.status.exit !== undefined ? "exited" : "notRunning" };
-  if ((active.catalog?.models.length ?? 0) === 0) return { ...base, status: "unavailable", reason: "noModels" };
+  const current = availability(agent, active);
+  if (current.phase === "disabled") return { ...base, status: "disabled", reason: current.reason };
+  if (current.phase !== "running") {
+    return {
+      ...base,
+      status: current.phase === "stopped" ? "stopped" : "unavailable",
+      reason: current.reason,
+    };
+  }
 
-  const capabilities = active.runtime.sessionCapabilities;
+  const activeAgent = current.agent;
+  if ((activeAgent.catalog?.models.length ?? 0) === 0) {
+    return { ...base, status: "unavailable", reason: "noModels" };
+  }
+
+  const capabilities = activeAgent.runtime.sessionCapabilities;
   if (capabilities === undefined || !capabilities.list) return { ...base, status: "unsupported", reason: "noList" };
   if (!capabilities.load) return { ...base, status: "unsupported", reason: "noLoad" };
   return { ...base, status: "ready", reason: "" };
@@ -859,12 +895,8 @@ function newSessionID(): string {
 }
 
 function unavailableReason(agent: AgentConfig, active: AgentState | undefined): string | undefined {
-  if (!agent.enabled) return "disabled";
-  if (active === undefined) return "notRunning";
-  if (active.status === "discovering") return "discovering";
-  if (active.status === "failed") return active.failure || "failed";
-  if (!active.runtime.status.running) return active.runtime.status.exit !== undefined ? "exited" : "notRunning";
-  return undefined;
+  const current = availability(agent, active);
+  return current.phase === "running" ? undefined : current.reason;
 }
 
 async function sessionExists(ctx: Plugin.Context, sessionID: string): Promise<boolean> {
