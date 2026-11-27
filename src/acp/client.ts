@@ -22,7 +22,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import { elicitationSession } from "../interaction/elicitation.js";
 import { logInfo, logWarn } from "../log.js";
-import { selectOption, valuesOf, type Catalog, type CatalogModel } from "./catalog.js";
+import { catalogCommands, selectOption, valuesOf, type Catalog, type CatalogModel } from "./catalog.js";
 import { AcpStartError, describeExit, type AcpExit, type FailureContext } from "./errors.js";
 
 /** Identifies the OpenCode session and turn that an ACP request belongs to. */
@@ -684,6 +684,7 @@ export class AcpClient {
       return {
         models,
         ...(model === undefined ? {} : { defaultModel: model.currentValue }),
+        commands: catalogCommands(this.commands(sessionId)),
       };
     } finally {
       await this.closeSession(sessionId);

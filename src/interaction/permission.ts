@@ -60,8 +60,8 @@ export class PermissionBroker {
   private readonly hook: Promise<{ dispose(): Promise<void> } | undefined>;
 
   constructor(private readonly ctx: Plugin.Context) {
-    // Shows the ACP option list on the native approval card. The card still
-    // has three buttons; the message only explains what the agent asked for.
+    // `assert` has no message field, so the agent's explanation reaches the
+    // card through the evaluate hook.
     this.hook = ctx.permission
       .hook("evaluate", (event) => {
         const message = event.metadata?.["acpMessage"];
@@ -103,7 +103,7 @@ export class PermissionBroker {
 
     this.waiters.set(nonce, waiter);
 
-    const description = approvalMessage(params);
+    const explanation = approvalMessage(params);
     const input = {
       sessionID: turn.sessionID,
       action: target.action,
@@ -113,10 +113,8 @@ export class PermissionBroker {
       ...(target.save.length > 0 ? { save: target.save } : {}),
       metadata: {
         acpRequest: nonce,
-        acpMessage: description.message,
-        tool: params.toolCall.title ?? params.toolCall.toolCallId,
-        kind: params.toolCall.kind ?? undefined,
-        input: { "ACP 选项": description.options },
+        // An empty string would render as a blank block on the approval card.
+        ...(explanation.length > 0 ? { acpMessage: explanation } : {}),
       },
     };
 
@@ -316,21 +314,17 @@ export class PermissionBroker {
 }
 
 /**
- * Builds the text the native approval card shows, including every ACP option.
- * The user still picks one of OpenCode's three buttons; the list explains what
- * the agent's options mean.
+ * Returns the agent's own explanation of the operation, or "" when it sent none.
+ *
+ * Only the free-form text is forwarded: the card already shows the action and
+ * resources, and its three buttons express OpenCode's decisions rather than the
+ * agent's ACP options.
  */
-function approvalMessage(params: RequestPermissionRequest): { message: string; options: string } {
-  const title = (params.toolCall.title ?? "").trim() || params.toolCall.toolCallId;
-  const details = (params.toolCall.content ?? []).flatMap((item) =>
-    item.type === "content" && item.content.type === "text" ? [item.content.text.trim()] : [],
-  );
-  const options = params.options.map((item) => `${item.optionId}: ${item.name} (${item.kind})`);
-
-  return {
-    message: [title, ...details.filter((item) => item.length > 0), "", "ACP 选项：", ...options].join("\n"),
-    options: options.join("\n"),
-  };
+function approvalMessage(params: RequestPermissionRequest): string {
+  return (params.toolCall.content ?? [])
+    .flatMap((item) => (item.type === "content" && item.content.type === "text" ? [item.content.text.trim()] : []))
+    .filter((text) => text.length > 0)
+    .join("\n");
 }
 
 /** Maps one ACP tool call to the action and resources shown in the native card. */

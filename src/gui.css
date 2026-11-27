@@ -226,3 +226,114 @@
   line-height: 16px;
   overflow-wrap: anywhere;
 }
+
+.acp-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--v2-text-text-base);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 16px;
+  letter-spacing: -0.04px;
+}
+
+.acp-panel-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+.acp-panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 530;
+  line-height: 16px;
+}
+
+.acp-panel-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 12px;
+}
+
+.acp-panel-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.acp-panel-field {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.acp-panel-field > :last-child {
+  flex-shrink: 0;
+  max-width: 55%;
+}
+
+.acp-panel-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.acp-panel-label,
+.acp-panel-description,
+.acp-panel-command-name {
+  overflow-wrap: anywhere;
+}
+
+.acp-panel-description {
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.acp-panel-message {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--v2-text-text-muted);
+}
+
+.acp-panel-commands {
+  display: grid;
+  gap: 6px;
+}
+
+.acp-panel-heading {
+  margin: 0;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  font-weight: 530;
+  line-height: 16px;
+}
+
+.acp-panel-command {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.acp-panel-command-name {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 16px;
+}

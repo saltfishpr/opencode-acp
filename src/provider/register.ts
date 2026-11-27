@@ -6,10 +6,8 @@ import { logWarn } from "../log.js";
 import { SessionBindings, sessionDirectory } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
 import { PromptFiles } from "./attachments.js";
+import { ADAPTER, PACKAGE } from "./constants.js";
 import { acpLanguageModel } from "./language.js";
-
-const ADAPTER = "acp";
-export const PACKAGE = `aisdk:${ADAPTER}`;
 
 // Keep OpenCode from compacting the remote session before the agent reports its window.
 const DEFAULT_CONTEXT_LIMIT = 10_000_000;
@@ -69,25 +67,6 @@ export async function registerProviders(ctx: Plugin.Context, options: RegisterOp
         const oldest = firstPrompts.keys().next().value;
         if (oldest !== undefined) firstPrompts.delete(oldest);
       }
-    }),
-    // Unknown slash commands already pass through OpenCode as prompts. This
-    // router exists for ACP commands that share a name with a built-in one.
-    ctx.command.transform((editor) => {
-      editor.add({
-        name: "acp",
-        description: "Run a command in the current ACP agent: /acp <command> [args]",
-        execute: async (input) => {
-          const text = input.prompt.text.trim();
-          if (text.length === 0) return;
-
-          const session = await ctx.session.get({ sessionID: input.sessionID });
-          const providerID = session.model?.providerID;
-          if (providerID === undefined || !options.agents.has(providerID)) return;
-
-          const command = text.startsWith("/") ? text : `/${text}`;
-          await ctx.session.prompt({ sessionID: input.sessionID, text: command, delivery: input.delivery });
-        },
-      });
     }),
     ctx.provider.transform((editor) => {
       registered.clear();
