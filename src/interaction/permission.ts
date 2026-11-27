@@ -108,7 +108,9 @@ export class PermissionBroker {
       sessionID: turn.sessionID,
       action: target.action,
       resources: target.resources,
-      save: target.save.length > 0 ? target.save : undefined,
+      // `save` may be omitted but not `undefined`: the assertion schema accepts
+      // a missing key, and rejects an undefined value.
+      ...(target.save.length > 0 ? { save: target.save } : {}),
       metadata: {
         acpRequest: nonce,
         acpMessage: description.message,
@@ -144,7 +146,12 @@ export class PermissionBroker {
       }
 
       if (first.kind === "settled") {
-        logInfo("acp", `approval ${first.result.allowed ? "allowed" : "rejected"} without waiting for a card reply`);
+        logInfo(
+          "acp",
+          `approval ${first.result.allowed ? "allowed" : "rejected"} without waiting for a card reply${
+            first.result.allowed ? "" : `: ${message(first.result.error)}`
+          }`,
+        );
         return first.result.allowed ? option(params, "allow") : option(params, "reject");
       }
 
