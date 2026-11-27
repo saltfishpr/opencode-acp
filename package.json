@@ -19,7 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "prepack": "pnpm run build"
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.12.0",
