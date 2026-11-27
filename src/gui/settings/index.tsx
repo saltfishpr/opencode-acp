@@ -23,7 +23,6 @@ import { definition } from "../definition.js";
 import { ServerSwitcher } from "../shared/server-switcher.js";
 import { AgentForm } from "./agent-form.js";
 import { AgentRow } from "./agent-row.js";
-import { SessionOptions } from "./session-options.js";
 
 type Connection = { id: string; client: ServerRef["client"] };
 type LoadError = "unavailable" | "updatePlugin" | "loadFailed";
@@ -31,7 +30,7 @@ type LoadResult = { connection: Connection; settings: SettingsView } | { connect
 
 export function Settings() {
   const ctx = usePlugin<typeof definition>();
-  const [selection, selectServer] = createSignal(ctx.sessions.current()?.server.id);
+  const [selection, selectServer] = createSignal<string>();
   const ids = () => ctx.servers.list();
   const selectedID = () => {
     const id = selection();
@@ -268,7 +267,6 @@ export function Settings() {
           )}
         </Show>
       </section>
-      <SessionOptions />
       <Show when={settings()}>
         {(current: () => SettingsView) => (
           <ctx.ui.SettingsSection>
