@@ -169,3 +169,5 @@ opencode plugin add github:saltfishpr/opencode-acp#master
    ```
 
 发布前请用安装后的包本身验证，不要只测本地目录副本。`src/index.ts` 由 OpenCode 直接加载，不需要预打包；`dist/gui-experimental.cjs` 必须随仓库提交，因为从 Git 安装不会执行 `vite build`。
+
+`package.json` 不提供 `build` 脚本。OpenCode 2.4.1 安装 Git 依赖时，会把带有 `build` 等生命周期脚本的包当成需要准备，并通过自身二进制执行 npm，导致 `opencode plugin add` 失败。监听构建用 `pnpm dev`，单次构建用 `pnpm exec vite build`，发布前由 `prepublishOnly` 自动构建。
