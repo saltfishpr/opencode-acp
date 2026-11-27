@@ -1,5 +1,6 @@
 import { AcpSettings } from "../../rpc.js";
 import type { GuiContext } from "../definition.js";
+import { rpcFailure, waitForLocation } from "../shared/location.js";
 import type { ImportRowData } from "./model.js";
 
 /** Loads the ACP history, then creates the OpenCode session through the host. */
@@ -18,6 +19,7 @@ export async function importSession(
 
   try {
     const rpc = row.server.client.rpc(AcpSettings);
+    await waitForLocation(row.server, row.cwd, input.signal);
     const prepared = await rpc.prepareImport(
       { agentID: row.agentID, sessionID: row.id },
       { ...location, signal: AbortSignal.timeout(120_000) },
@@ -67,9 +69,6 @@ export async function importSession(
     input.close();
   } catch (cause) {
     if (input.signal.aborted) return;
-    const type = typeof cause === "object" && cause !== null && "type" in cause ? cause.type : undefined;
-    input.fail(
-      type === "rpc.method_not_found" ? ctx.t("import.error.updatePlugin") : ctx.t("import.error.requestFailed"),
-    );
+    input.fail(ctx.t(`import.error.${rpcFailure(cause)}`));
   }
 }

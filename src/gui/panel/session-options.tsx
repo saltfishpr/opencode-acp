@@ -2,6 +2,7 @@ import { usePanel, usePlugin, type MountedSession } from "@opencode/plugin/gui";
 import { For, Show, createEffect, createMemo, createResource, createSignal, on } from "solid-js";
 import { AcpSettings, type SessionOptionView, type SessionOptionsView } from "../../rpc.js";
 import { definition } from "../definition.js";
+import { retryUnavailable, waitForLocation } from "../shared/location.js";
 
 type LoadResult = { target: string; view: SessionOptionsView } | { target: string; error: true };
 
@@ -19,9 +20,11 @@ export function SessionOptions(props: { session: MountedSession }) {
   const [resource, { refetch }] = createResource(identity, async (target): Promise<LoadResult> => {
     const session = props.session;
     try {
-      const view = await session.server.client
-        .rpc(AcpSettings)
-        .sessionOptions({ sessionID: session.id }, { location: { directory: session.directory } });
+      const view = await retryUnavailable(() =>
+        session.server.client
+          .rpc(AcpSettings)
+          .sessionOptions({ sessionID: session.id }, { location: { directory: session.directory } }),
+      );
       return { target, view };
     } catch {
       return { target, error: true };
@@ -61,6 +64,7 @@ export function SessionOptions(props: { session: MountedSession }) {
     setSaving(true);
     setActionError(undefined);
     try {
+      await waitForLocation(session.server, session.directory);
       const outcome = await session.server.client.rpc(AcpSettings).setSessionOption(
         {
           sessionID: session.id,

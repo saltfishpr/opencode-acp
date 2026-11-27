@@ -1,5 +1,6 @@
 import type { ServerRef } from "@opencode/plugin/gui";
 import { AcpSettings, type ImportableAgent, type ImportableSession } from "../../rpc.js";
+import { waitForLocation } from "../shared/location.js";
 
 const AGENT_TIMEOUT_MS = 30_000;
 const SESSIONS_TIMEOUT_MS = 60_000;
@@ -32,6 +33,7 @@ export async function loadImportSessions(
   cwd: string | undefined,
   signal: AbortSignal,
 ): Promise<readonly ImportableSession[] | undefined> {
+  if (cwd !== undefined) await waitForLocation(server, cwd, signal);
   try {
     const view = await server.client.rpc(AcpSettings).importableSessions(
       { agentID, ...(cwd === undefined ? {} : { cwd }) },

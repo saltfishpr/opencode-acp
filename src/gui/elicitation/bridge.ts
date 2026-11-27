@@ -2,6 +2,7 @@ import type { Cleanup, ServerRef } from "@opencode/plugin/gui";
 import { createEffect } from "solid-js";
 import { AcpSettings, type ElicitationRequestView } from "../../rpc.js";
 import type { GuiContext } from "../definition.js";
+import { retryUnavailable } from "../shared/location.js";
 
 /** How often the bridge re-reads the form the user is filling in. */
 const POLL_MS = 500;
@@ -199,10 +200,11 @@ function attach(ctx: GuiContext, server: ServerRef): Cleanup {
     const requests = new Map<string, ElicitationRequestView>();
     const collect = async (directory: string | undefined): Promise<void> => {
       try {
-        const result =
+        const result = await retryUnavailable(() =>
           directory === undefined
-            ? await rpc.pendingElicitations({})
-            : await rpc.pendingElicitations({}, { location: { directory } });
+            ? rpc.pendingElicitations({})
+            : rpc.pendingElicitations({}, { location: { directory } }),
+        );
         for (const request of result.requests) {
           requests.set(request.requestID, request);
         }

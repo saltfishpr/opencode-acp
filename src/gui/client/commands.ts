@@ -2,6 +2,7 @@ import { Command, createKeyed, createLatest, type MountedSession } from "@openco
 import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { AcpSettings, type RunCommandStatus, type SessionCommandView, type SessionCommandsView } from "../../rpc.js";
 import type { GuiContext } from "../definition.js";
+import { retryUnavailable, rpcFailure, waitForLocation } from "../shared/location.js";
 import { acpProviderID, isAcpSession } from "./session.js";
 
 const EMPTY: readonly SessionCommandView[] = [];
@@ -40,10 +41,15 @@ export function createSessionCommands(ctx: GuiContext) {
   });
 
   const latest = createLatest(target, async (value, signal): Promise<Result> => {
+    const { session } = value;
     try {
-      const view = await value.session.server.client
-        .rpc(AcpSettings)
-        .sessionCommands({ sessionID: value.session.id }, { location: { directory: value.session.directory }, signal });
+      const view = await retryUnavailable(
+        () =>
+          session.server.client
+            .rpc(AcpSettings)
+            .sessionCommands({ sessionID: session.id }, { location: { directory: session.directory }, signal }),
+        signal,
+      );
       return { key: value.key, view };
     } catch {
       return { key: value.key, view: { status: "unavailable", commands: [] } };
@@ -116,6 +122,7 @@ export function createSessionCommands(ctx: GuiContext) {
 
     const delivery = ctx.screen.current()?.composer.delivery();
     try {
+      await waitForLocation(session.server, session.directory);
       const result = await session.server.client.rpc(AcpSettings).runCommand(
         {
           sessionID: session.id,
@@ -134,10 +141,9 @@ export function createSessionCommands(ctx: GuiContext) {
         });
       }
     } catch (error) {
-      const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
       ctx.toast.show({
         title: ctx.t("command.failed"),
-        description: type === "rpc.method_not_found" ? ctx.t("command.updatePlugin") : ctx.t("command.requestFailed"),
+        description: ctx.t(`command.${rpcFailure(error)}`),
         variant: "error",
       });
     }

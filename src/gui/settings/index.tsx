@@ -20,6 +20,7 @@ import {
   type SettingsView,
 } from "../../rpc.js";
 import { definition } from "../definition.js";
+import { retryUnavailable } from "../shared/location.js";
 import { ServerSwitcher } from "../shared/server-switcher.js";
 import { AgentForm } from "./agent-form.js";
 import { AgentRow } from "./agent-row.js";
@@ -49,7 +50,9 @@ export function Settings() {
     () => connection() ?? false,
     async (target): Promise<LoadResult> => {
       try {
-        const settings = await target.client.rpc(AcpSettings).settings({}, { signal: AbortSignal.timeout(10_000) });
+        const settings = await retryUnavailable(() =>
+          target.client.rpc(AcpSettings).settings({}, { signal: AbortSignal.timeout(10_000) }),
+        );
         return { connection: target, settings };
       } catch (error) {
         const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;

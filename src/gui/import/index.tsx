@@ -2,6 +2,7 @@ import { usePlugin } from "@opencode/plugin/gui";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { AcpSettings } from "../../rpc.js";
 import { definition } from "../definition.js";
+import { rpcFailure, waitForLocation } from "../shared/location.js";
 import { importSession } from "./action.js";
 import { createImportController } from "./controller.js";
 import { ImportGroupSection } from "./group.js";
@@ -173,6 +174,7 @@ export function ImportSessions(props: { close(): void }) {
     setDeleting(row.key);
     setError(undefined);
     try {
+      await waitForLocation(row.server, row.cwd);
       const outcome = await row.server.client
         .rpc(AcpSettings)
         .deleteSession(
@@ -189,10 +191,7 @@ export function ImportSessions(props: { close(): void }) {
       else if (outcome.status === "conflict") setError(ctx.t("import.error.deleteConflict"));
       else setError(ctx.t("import.error.deleteFailed"));
     } catch (cause) {
-      const type = typeof cause === "object" && cause !== null && "type" in cause ? cause.type : undefined;
-      setError(
-        type === "rpc.method_not_found" ? ctx.t("import.error.updatePlugin") : ctx.t("import.error.requestFailed"),
-      );
+      setError(ctx.t(`import.error.${rpcFailure(cause)}`));
     } finally {
       setDeleting(undefined);
     }
