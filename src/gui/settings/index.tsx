@@ -51,7 +51,7 @@ export function Settings() {
     async (target): Promise<LoadResult> => {
       try {
         const settings = await target.client.rpc(AcpSettings).settings({}, { signal: AbortSignal.timeout(10_000) });
-        return { connection: target, settings: settings as SettingsView };
+        return { connection: target, settings };
       } catch (error) {
         const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
         return {
@@ -106,12 +106,12 @@ export function Settings() {
 
   async function run(
     id: string,
-    request: (rpc: NonNullable<ReturnType<typeof rpcFor>>) => Promise<unknown>,
+    request: (rpc: NonNullable<ReturnType<typeof rpcFor>>) => Promise<MutationResult>,
   ): Promise<MutationResult> {
     const rpc = rpcFor(id);
     if (rpc === undefined) return { status: "saveFailed" };
     try {
-      return (await request(rpc)) as MutationResult;
+      return await request(rpc);
     } catch {
       return { status: "saveFailed" };
     } finally {

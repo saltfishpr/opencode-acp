@@ -7,38 +7,9 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { AcpTurnContext } from "../acp/client.js";
 import { logWarn } from "../log.js";
+import type { ElicitationField, ElicitationRequestView } from "../rpc.js";
 
-/** One field of the native OpenCode form the GUI creates for an elicitation. */
-export interface ElicitationField {
-  readonly key: string;
-  readonly title?: string;
-  readonly description?: string;
-  readonly required?: boolean;
-  readonly type: "string" | "number" | "integer" | "boolean" | "multiselect";
-  readonly format?: "email" | "uri" | "date" | "date-time";
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly pattern?: string;
-  readonly minimum?: number;
-  readonly maximum?: number;
-  readonly minItems?: number;
-  readonly maxItems?: number;
-  readonly default?: string | number | boolean | readonly string[];
-  readonly options?: ReadonlyArray<{ value: string; label: string; description?: string }>;
-}
-
-/** One pending elicitation as the GUI receives it over RPC. */
-export interface ElicitationRequestView {
-  readonly requestID: string;
-  readonly sessionID: string;
-  /** Working directory of the ACP session, used to route location-scoped RPC calls. */
-  readonly directory: string;
-  readonly agentName: string;
-  readonly title: string;
-  readonly message?: string;
-  readonly fields: readonly ElicitationField[];
-  readonly toolCallID?: string;
-}
+export type { ElicitationField, ElicitationRequestView } from "../rpc.js";
 
 export interface ElicitationEmitter {
   request(view: ElicitationRequestView): void;

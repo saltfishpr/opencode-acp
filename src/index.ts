@@ -17,14 +17,13 @@ import {
 } from "./config.js";
 import { PermissionBroker } from "./interaction/permission.js";
 import { ElicitationBroker } from "./interaction/elicitation.js";
-import { logError, logInfo, logWarn, setLogLevel, type LogLevel } from "./log.js";
+import { logError, logInfo, logWarn, setLogLevel } from "./log.js";
 import { clearCatalog, loadCatalog, saveCatalog } from "./provider/catalog.js";
 import { PACKAGE, registerProviders } from "./provider/register.js";
 import {
   AcpSettings,
   AGENT_ID,
   type AbortImportInput,
-  type AgentInput,
   type AgentStatus,
   type DeleteSessionInput,
   type ImportableAgent,
@@ -112,8 +111,7 @@ export default Plugin.define({
       async settings() {
         return enqueue(async () => settingsView());
       },
-      saveAgent(input) {
-        const { revision, create, agent } = input as { revision: number; create: boolean; agent: AgentInput };
+      saveAgent({ revision, create, agent }) {
         return mutate(revision, async () => {
           const previous = state.config.agents.find((item) => item.id === agent.id);
           if (create && previous !== undefined) return { status: "duplicate", field: "id" };
@@ -151,8 +149,7 @@ export default Plugin.define({
           });
         });
       },
-      setEnabled(input) {
-        const { revision, id, enabled } = input as { revision: number; id: string; enabled: boolean };
+      setEnabled({ revision, id, enabled }) {
         return mutate(revision, async () => {
           const agent = state.config.agents.find((item) => item.id === id);
           if (agent === undefined) return { status: "notFound" };
@@ -160,16 +157,14 @@ export default Plugin.define({
           return saveAgent(ctx, id, agent, { ...agent, enabled });
         });
       },
-      removeAgent(input) {
-        const { revision, id } = input as { revision: number; id: string };
+      removeAgent({ revision, id }) {
         return mutate(revision, async () => {
           const agent = state.config.agents.find((item) => item.id === id);
           if (agent === undefined) return { status: "notFound" };
           return saveAgent(ctx, id, agent, undefined);
         });
       },
-      retryAgent(input) {
-        const { revision, id } = input as { revision: number; id: string };
+      retryAgent({ revision, id }) {
         return mutate(revision, async () => {
           const agent = state.config.agents.find((item) => item.id === id);
           if (agent === undefined) return { status: "notFound" };
@@ -183,8 +178,7 @@ export default Plugin.define({
           return { status: "ok" };
         });
       },
-      setLogLevel(input) {
-        const { revision, logLevel } = input as { revision: number; logLevel: LogLevel };
+      setLogLevel({ revision, logLevel }) {
         return mutate(revision, async () => {
           if (!isLogLevel(logLevel)) return { status: "invalid" };
           if (logLevel !== state.config.logLevel) {
@@ -198,43 +192,31 @@ export default Plugin.define({
         return Promise.resolve(listImportAgents());
       },
       importableSessions(input) {
-        return listImportableSessions(ctx, bindings, input as ImportableSessionsInput);
+        return listImportableSessions(ctx, bindings, input);
       },
-      prepareImport(input) {
-        const { agentID, sessionID } = input as { agentID: string; sessionID: string };
+      prepareImport({ agentID, sessionID }) {
         return prepareImport(ctx, bindings, agentID, sessionID);
       },
       abortImport(input) {
-        return abortImport(ctx, bindings, input as AbortImportInput);
+        return abortImport(ctx, bindings, input);
       },
       deleteSession(input) {
-        return deleteAgentSession(ctx, bindings, input as DeleteSessionInput);
+        return deleteAgentSession(ctx, bindings, input);
       },
-      sessionOptions(input) {
-        return readSessionOptions(ctx, bindings, (input as { sessionID: string }).sessionID);
+      sessionOptions({ sessionID }) {
+        return readSessionOptions(ctx, bindings, sessionID);
       },
-      setSessionOption(input) {
-        const { sessionID, configID, value } = input as {
-          sessionID: string;
-          configID: string;
-          value: string | boolean;
-        };
+      setSessionOption({ sessionID, configID, value }) {
         return applySessionOption(ctx, bindings, sessionID, configID, value);
       },
-      claimElicitation(input) {
-        return Promise.resolve({ claimed: elicitations.claim((input as { requestID: string }).requestID) });
+      claimElicitation({ requestID }) {
+        return Promise.resolve({ claimed: elicitations.claim(requestID) });
       },
-      answerElicitation(input) {
-        const { requestID, action, content } = input as {
-          requestID: string;
-          action: "accept" | "cancel" | "decline";
-          content?: Record<string, unknown>;
-        };
+      answerElicitation({ requestID, action, content }) {
         const answered = elicitations.answer(requestID, action, content);
         return Promise.resolve<MutationResult>({ status: answered ? "ok" : "notFound" });
       },
-      elicitationForm(input) {
-        const { requestID, formID } = input as { requestID: string; formID: string };
+      elicitationForm({ requestID, formID }) {
         return Promise.resolve<MutationResult>({
           status: elicitations.form(requestID, formID) ? "ok" : "notFound",
         });
@@ -247,7 +229,7 @@ export default Plugin.define({
     elicitations.attach({
       request(view) {
         void rpc.events
-          .emit("elicitation", view as unknown as Record<string, unknown>)
+          .emit("elicitation", view)
           .catch((error: unknown) => logWarn("acp", `could not publish an elicitation: ${message(error)}`));
       },
       cancelled(requestID) {
@@ -323,7 +305,7 @@ function settingsView(): SettingsView {
         id,
         name,
         command,
-        args,
+        args: [...args],
         enabled,
         status,
         envKeys: Object.keys(env),

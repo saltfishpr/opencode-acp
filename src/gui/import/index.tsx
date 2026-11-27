@@ -1,6 +1,6 @@
 import { usePlugin } from "@opencode/plugin/gui";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { AcpSettings, type MutationResult } from "../../rpc.js";
+import { AcpSettings } from "../../rpc.js";
 import { definition } from "../definition.js";
 import { importSession } from "./action.js";
 import { createImportController } from "./controller.js";
@@ -173,12 +173,12 @@ export function ImportSessions(props: { close(): void }) {
     setDeleting(row.key);
     setError(undefined);
     try {
-      const outcome = (await row.server.client
+      const outcome = await row.server.client
         .rpc(AcpSettings)
         .deleteSession(
           { agentID: row.agentID, sessionID: row.id },
           { location: { directory: row.cwd }, signal: AbortSignal.timeout(60_000) },
-        )) as MutationResult;
+        );
 
       if (outcome.status === "ok" || outcome.status === "notFound") {
         void reload();

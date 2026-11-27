@@ -173,11 +173,11 @@ function attach(ctx: GuiContext, server: ServerRef): Cleanup {
   };
 
   const offRequest = rpc.events.on("elicitation", (event) => {
-    void handle(event.data as unknown as ElicitationRequestView);
+    void handle(event.data);
   });
 
   const offCancelled = rpc.events.on("elicitationCancelled", (event) => {
-    const { requestID } = event.data as unknown as { requestID: string };
+    const { requestID } = event.data;
     const state = active.get(requestID);
     if (state === undefined) return;
 
@@ -204,7 +204,7 @@ function attach(ctx: GuiContext, server: ServerRef): Cleanup {
           directory === undefined
             ? await rpc.pendingElicitations({})
             : await rpc.pendingElicitations({}, { location: { directory } });
-        for (const request of (result as unknown as { requests: ElicitationRequestView[] }).requests) {
+        for (const request of result.requests) {
           requests.set(request.requestID, request);
         }
       } catch (error) {

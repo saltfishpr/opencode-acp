@@ -1,11 +1,5 @@
 import type { ServerRef } from "@opencode/plugin/gui";
-import {
-  AcpSettings,
-  type ImportableAgent,
-  type ImportableSession,
-  type ImportAgentsView,
-  type ImportSessionsView,
-} from "../../rpc.js";
+import { AcpSettings, type ImportableAgent, type ImportableSession } from "../../rpc.js";
 
 const AGENT_TIMEOUT_MS = 30_000;
 const SESSIONS_TIMEOUT_MS = 60_000;
@@ -19,9 +13,9 @@ export async function loadImportAgents(servers: readonly ServerRef[]): Promise<A
   return Promise.all(
     servers.map(async (server): Promise<AgentLoad> => {
       try {
-        const view = (await server.client
+        const view = await server.client
           .rpc(AcpSettings)
-          .importAgents({}, { signal: AbortSignal.timeout(AGENT_TIMEOUT_MS) })) as ImportAgentsView;
+          .importAgents({}, { signal: AbortSignal.timeout(AGENT_TIMEOUT_MS) });
         return { server, agents: view.agents };
       } catch (error) {
         const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
@@ -39,13 +33,13 @@ export async function loadImportSessions(
   signal: AbortSignal,
 ): Promise<readonly ImportableSession[] | undefined> {
   try {
-    const view = (await server.client.rpc(AcpSettings).importableSessions(
+    const view = await server.client.rpc(AcpSettings).importableSessions(
       { agentID, ...(cwd === undefined ? {} : { cwd }) },
       {
         ...(cwd === undefined ? {} : { location: { directory: cwd } }),
         signal: AbortSignal.any([signal, AbortSignal.timeout(SESSIONS_TIMEOUT_MS)]),
       },
-    )) as ImportSessionsView;
+    );
     return view.sessions;
   } catch {
     return undefined;

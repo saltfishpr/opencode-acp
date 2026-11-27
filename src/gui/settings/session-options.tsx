@@ -1,6 +1,6 @@
 import { usePlugin, type MountedSession } from "@opencode/plugin/gui";
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
-import { AcpSettings, type MutationResult, type SessionOptionsView } from "../../rpc.js";
+import { AcpSettings, type SessionOptionsView } from "../../rpc.js";
 import { definition } from "../definition.js";
 
 type LoadResult =
@@ -21,9 +21,9 @@ export function SessionOptions() {
   const [resource, { refetch }] = createResource(source, async (session): Promise<LoadResult> => {
     const directory = session.location?.directory;
     try {
-      const view = (await session.server.client
+      const view = await session.server.client
         .rpc(AcpSettings)
-        .sessionOptions({ sessionID: session.id }, rpcOptions(session))) as SessionOptionsView;
+        .sessionOptions({ sessionID: session.id }, rpcOptions(session));
       return { sessionID: session.id, directory, view };
     } catch {
       return { sessionID: session.id, directory, error: true };
@@ -52,14 +52,14 @@ export function SessionOptions() {
     setPending(configID);
     setActionError(undefined);
     try {
-      const outcome = (await session.server.client.rpc(AcpSettings).setSessionOption(
+      const outcome = await session.server.client.rpc(AcpSettings).setSessionOption(
         {
           sessionID: session.id,
           configID,
           value,
         },
         rpcOptions(session),
-      )) as MutationResult;
+      );
       if (outcome.status !== "ok") setActionError(ctx.t(`error.${outcome.status}`));
     } catch {
       setActionError(ctx.t("error.saveFailed"));

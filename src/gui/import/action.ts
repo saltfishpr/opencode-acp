@@ -1,4 +1,4 @@
-import { AcpSettings, type PrepareImportResult } from "../../rpc.js";
+import { AcpSettings } from "../../rpc.js";
 import type { GuiContext } from "../definition.js";
 import type { ImportRowData } from "./model.js";
 
@@ -18,10 +18,10 @@ export async function importSession(
 
   try {
     const rpc = row.server.client.rpc(AcpSettings);
-    const prepared = (await rpc.prepareImport(
+    const prepared = await rpc.prepareImport(
       { agentID: row.agentID, sessionID: row.id },
       { ...location, signal: AbortSignal.timeout(120_000) },
-    )) as PrepareImportResult;
+    );
 
     if (prepared.status !== "ok" || prepared.payload === undefined) {
       input.fail(
