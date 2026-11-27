@@ -88,7 +88,7 @@ const RESUME_TIMEOUT_MS = 60_000;
 const DELETE_TIMEOUT_MS = 15_000;
 
 /** Upper bound on session updates buffered while no turn is running. */
-const PENDING_LIMIT = 100;
+const BUFFER_LIMIT = 100;
 
 /** Bound for one `session/list` page; agents may answer from local storage. */
 const LIST_TIMEOUT_MS = 60_000;
@@ -97,23 +97,24 @@ const LIST_TIMEOUT_MS = 60_000;
 const LIST_PAGE_LIMIT = 50;
 const LIST_SESSION_LIMIT = 5_000;
 
+/** What this process is currently doing with one ACP session. */
+type SessionActivity =
+  | { readonly kind: "idle" }
+  | { readonly kind: "turn"; readonly queue: UpdateQueue; readonly turn: TurnState }
+  | { readonly kind: "replay"; readonly capture: SessionUpdate[] | undefined };
+
 /** Everything learned about one ACP session. */
 interface SessionState {
   configs: readonly SessionConfigOption[];
   modes: SessionModeState | undefined;
   commands: readonly AvailableCommand[];
   title: string | undefined;
-  /** Session-level updates received while no turn was running. */
-  pending: SessionUpdate[];
-  /** Collects replayed `session/load` updates for history import. */
-  recorder: SessionUpdate[] | undefined;
-  /** Replayed updates are dropped instead of buffered while loading. */
-  replaying: boolean;
   loaded: boolean;
   /** Created by this process, so cleanup may delete it. */
   owned: boolean;
-  queue: UpdateQueue | undefined;
-  turn: TurnState | undefined;
+  activity: SessionActivity;
+  /** Session-level updates received while no turn was running. */
+  buffered: SessionUpdate[];
 }
 
 function sessionOf(sessions: Map<string, SessionState>, sessionId: string): SessionState {
@@ -124,13 +125,10 @@ function sessionOf(sessions: Map<string, SessionState>, sessionId: string): Sess
       modes: undefined,
       commands: [],
       title: undefined,
-      pending: [],
-      recorder: undefined,
-      replaying: false,
       loaded: false,
       owned: false,
-      queue: undefined,
-      turn: undefined,
+      activity: { kind: "idle" },
+      buffered: [],
     };
     sessions.set(sessionId, session);
   }
@@ -262,9 +260,8 @@ export class AcpClient {
 
     const buffered = (sessionId: string, update: SessionUpdate): void => {
       const session = sessionOf(sessions, sessionId);
-      if (session.replaying) return;
-      session.pending.push(update);
-      if (session.pending.length > PENDING_LIMIT) session.pending.splice(0, session.pending.length - PENDING_LIMIT);
+      session.buffered.push(update);
+      if (session.buffered.length > BUFFER_LIMIT) session.buffered.splice(0, session.buffered.length - BUFFER_LIMIT);
     };
 
     const app = client({ name: "opencode-acp" })
@@ -276,17 +273,21 @@ export class AcpClient {
 
         remember(params.sessionId, update);
 
-        const session = sessions.get(params.sessionId);
-        if (session?.recorder !== undefined) session.recorder.push(update);
-        if (session?.queue !== undefined) {
-          session.queue.push(update);
-          return;
+        const activity = sessions.get(params.sessionId)?.activity;
+        switch (activity?.kind) {
+          case "replay":
+            activity.capture?.push(update);
+            return;
+          case "turn":
+            activity.queue.push(update);
+            return;
+          default:
+            if (bufferable(update)) buffered(params.sessionId, update);
         }
-        if (session?.recorder !== undefined) return;
-        if (bufferable(update)) buffered(params.sessionId, update);
       })
       .onRequest("session/request_permission", async ({ params }) => {
-        const turn = sessions.get(params.sessionId)?.turn;
+        const current = sessions.get(params.sessionId)?.activity;
+        const turn = current?.kind === "turn" ? current.turn : undefined;
         if (turn === undefined) return declinePermission(params);
 
         if (turn.controller.signal.aborted) return cancelledPermission();
@@ -317,7 +318,8 @@ export class AcpClient {
       })
       .onRequest("elicitation/create", async ({ params }) => {
         const sessionId = elicitationSession(params);
-        const turn = sessionId === undefined ? undefined : sessions.get(sessionId)?.turn;
+        const current = sessionId === undefined ? undefined : sessions.get(sessionId)?.activity;
+        const turn = current?.kind === "turn" ? current.turn : undefined;
 
         if (turn === undefined) {
           logInfo(options.name, "declined an elicitation outside a running turn");
@@ -521,16 +523,20 @@ export class AcpClient {
   }
 
   /**
-   * Loads an existing ACP session. Updates the agent replays are dropped unless
-   * `capture` is given, in which case they are appended to that array for
-   * history import.
+   * Loads an existing ACP session, returning the updates the agent replays.
+   *
+   * History arrives as ordinary `session/update` notifications while the
+   * request runs, not in the response, so it is captured from the notification
+   * path. Pass `capture` for history import; otherwise the replay is dropped so
+   * old plans and notices do not surface in the next turn.
    */
-  async loadSession(sessionId: string, cwd: string, capture?: SessionUpdate[]): Promise<void> {
+  async loadSession(sessionId: string, cwd: string, capture = false): Promise<SessionUpdate[]> {
     if (this.isClosed) throw this.closedError();
 
     const session = this.session(sessionId);
-    if (capture !== undefined) session.recorder = capture;
-    else session.replaying = true;
+    const updates: SessionUpdate[] = [];
+    const previous = session.activity;
+    session.activity = { kind: "replay", capture: capture ? updates : undefined };
     try {
       const response = await this.connection.agent.request(
         "session/load",
@@ -542,9 +548,9 @@ export class AcpClient {
       this.rememberModes(session, response.modes);
       session.loaded = true;
     } finally {
-      if (capture !== undefined && session.recorder === capture) session.recorder = undefined;
-      session.replaying = false;
+      session.activity = previous;
     }
+    return updates;
   }
 
   /**
@@ -721,6 +727,9 @@ export class AcpClient {
   /**
    * Sends one prompt and starts collecting the session updates it produces.
    *
+   * One ACP session runs one turn at a time: a prompt issued while a turn or a
+   * `session/load` replay is in progress settles with an error.
+   *
    * `context` ties reverse requests from the agent to the OpenCode session that
    * owns this turn. The caller reads `updates` until it ends, then inspects
    * `response` (or `error`). Aborting `signal`, or calling `dispose()`, sends
@@ -737,6 +746,11 @@ export class AcpClient {
     if (signal?.aborted) return settledPrompt({ response: { stopReason: "cancelled" } });
     if (this.isClosed) return settledPrompt({ error: this.closedError() });
 
+    const session = this.session(sessionId);
+    if (session.activity.kind !== "idle") {
+      return settledPrompt({ error: new Error("ACP session is busy") });
+    }
+
     const queue = new UpdateQueue();
     const controller = new AbortController();
     const turn: TurnState = {
@@ -750,13 +764,11 @@ export class AcpClient {
       pending: new Set(),
     };
 
-    const session = this.session(sessionId);
-    session.queue = queue;
-    session.turn = turn;
+    session.activity = { kind: "turn", queue, turn };
 
     // Session-level updates that arrived between turns belong to this turn.
-    for (const update of session.pending) queue.push(update);
-    session.pending = [];
+    for (const update of session.buffered) queue.push(update);
+    session.buffered = [];
 
     let done = false;
     let cancelled = false;
@@ -767,8 +779,9 @@ export class AcpClient {
       done = true;
       if (grace !== undefined) clearTimeout(grace);
       signal?.removeEventListener("abort", cancel);
-      if (session.queue === queue) session.queue = undefined;
-      if (session.turn === turn) session.turn = undefined;
+      if (session.activity.kind === "turn" && session.activity.turn === turn) {
+        session.activity = { kind: "idle" };
+      }
       this.releasePending(turn);
       if (!controller.signal.aborted) controller.abort();
 
@@ -842,9 +855,10 @@ export class AcpClient {
 
   /** Answers pending permission requests with `cancelled` before the turn ends. */
   private abortTurn(sessionId: string): void {
-    const turn = this.sessions.get(sessionId)?.turn;
-    if (turn === undefined) return;
+    const activity = this.sessions.get(sessionId)?.activity;
+    if (activity?.kind !== "turn") return;
 
+    const { turn } = activity;
     if (!turn.controller.signal.aborted) turn.controller.abort();
     this.releasePending(turn);
   }
@@ -856,8 +870,9 @@ export class AcpClient {
 
   private reset(): void {
     for (const session of this.sessions.values()) {
-      const turn = session.turn;
-      if (turn === undefined) continue;
+      if (session.activity.kind !== "turn") continue;
+
+      const { turn } = session.activity;
       if (!turn.controller.signal.aborted) turn.controller.abort();
       this.releasePending(turn);
     }

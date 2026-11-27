@@ -535,9 +535,9 @@ async function prepareImport(
   const release = await pending;
 
   try {
-    const history: SessionUpdate[] = [];
+    let history: SessionUpdate[];
     try {
-      await loadForImport(client, acpSessionID, info.cwd, history);
+      history = await loadForImport(client, acpSessionID, info.cwd);
     } catch (error) {
       logWarn("acp", `could not load ${acpSessionID} for import: ${message(error)}`);
       return failed("loadFailed", "load");
@@ -622,19 +622,13 @@ async function abortImport(
   return { status: "ok" };
 }
 
-async function loadForImport(
-  client: AcpClient,
-  sessionID: string,
-  cwd: string,
-  history: SessionUpdate[],
-): Promise<void> {
+async function loadForImport(client: AcpClient, sessionID: string, cwd: string): Promise<SessionUpdate[]> {
   try {
-    await client.loadSession(sessionID, cwd, history);
+    return await client.loadSession(sessionID, cwd, true);
   } catch (error) {
     if (!client.hasSession(sessionID) || !client.canCloseSession) throw error;
     await client.closeSession(sessionID);
-    history.length = 0;
-    await client.loadSession(sessionID, cwd, history);
+    return client.loadSession(sessionID, cwd, true);
   }
 }
 
