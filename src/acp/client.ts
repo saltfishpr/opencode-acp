@@ -97,6 +97,46 @@ const LIST_TIMEOUT_MS = 60_000;
 const LIST_PAGE_LIMIT = 50;
 const LIST_SESSION_LIMIT = 5_000;
 
+/** Everything learned about one ACP session. */
+interface SessionState {
+  configs: readonly SessionConfigOption[];
+  modes: SessionModeState | undefined;
+  commands: readonly AvailableCommand[];
+  title: string | undefined;
+  /** Session-level updates received while no turn was running. */
+  pending: SessionUpdate[];
+  /** Collects replayed `session/load` updates for history import. */
+  recorder: SessionUpdate[] | undefined;
+  /** Replayed updates are dropped instead of buffered while loading. */
+  replaying: boolean;
+  loaded: boolean;
+  /** Created by this process, so cleanup may delete it. */
+  owned: boolean;
+  queue: UpdateQueue | undefined;
+  turn: TurnState | undefined;
+}
+
+function sessionOf(sessions: Map<string, SessionState>, sessionId: string): SessionState {
+  let session = sessions.get(sessionId);
+  if (session === undefined) {
+    session = {
+      configs: [],
+      modes: undefined,
+      commands: [],
+      title: undefined,
+      pending: [],
+      recorder: undefined,
+      replaying: false,
+      loaded: false,
+      owned: false,
+      queue: undefined,
+      turn: undefined,
+    };
+    sessions.set(sessionId, session);
+  }
+  return session;
+}
+
 /**
  * One running ACP agent process plus its JSON-RPC connection.
  *
@@ -107,21 +147,8 @@ const LIST_SESSION_LIMIT = 5_000;
 export class AcpClient {
   private readonly child: ChildProcess;
   private readonly connection: ClientConnection;
-  private readonly queues: Map<string, UpdateQueue>;
-  private readonly turns: Map<string, TurnState>;
-  private readonly configs: Map<string, readonly SessionConfigOption[]>;
-  private readonly modeStates: Map<string, SessionModeState>;
-  private readonly commandLists: Map<string, readonly AvailableCommand[]>;
-  private readonly titles: Map<string, string>;
-  /** Session-level updates received while no turn was running. */
-  private readonly pending: Map<string, SessionUpdate[]>;
-  private readonly loaded = new Set<string>();
-  /** Sessions this process created, as opposed to resumed or loaded from storage. */
-  private readonly owned = new Set<string>();
-  /** Sessions whose replayed `session/load` updates are being collected. */
-  private readonly recorders: Map<string, SessionUpdate[]>;
-  /** Sessions whose replayed updates are dropped instead of buffered. */
-  private readonly replaying = new Set<string>();
+  /** Per-session state, keyed by ACP session ID. One record means one cleanup point. */
+  private readonly sessions: Map<string, SessionState>;
   private readonly name: string;
   private readonly displayName: string;
   private readonly command: string;
@@ -137,40 +164,22 @@ export class AcpClient {
     child: ChildProcess,
     connection: ClientConnection,
     initialize: InitializeResponse,
-    queues: Map<string, UpdateQueue>,
-    turns: Map<string, TurnState>,
-    configs: Map<string, readonly SessionConfigOption[]>,
-    modes: Map<string, SessionModeState>,
-    commands: Map<string, readonly AvailableCommand[]>,
-    titles: Map<string, string>,
-    pending: Map<string, SessionUpdate[]>,
-    recorders: Map<string, SessionUpdate[]>,
-    replaying: Set<string>,
-    name: string,
-    displayName: string,
-    command: string,
+    options: AcpClientOptions,
+    sessions: Map<string, SessionState>,
     usage: ContextWindow,
   ) {
     this.child = child;
     this.connection = connection;
     this.initialize = initialize;
-    this.queues = queues;
-    this.turns = turns;
-    this.configs = configs;
-    this.modeStates = modes;
-    this.commandLists = commands;
-    this.titles = titles;
-    this.pending = pending;
-    this.recorders = recorders;
-    this.replaying = replaying;
-    this.name = name;
-    this.displayName = displayName;
-    this.command = command;
+    this.sessions = sessions;
+    this.name = options.name;
+    this.displayName = options.displayName ?? options.name;
+    this.command = options.command;
     this.usage = usage;
 
     child.on("exit", (code, signal) => {
       this.exitInfo = { code, signal };
-      if (!this.closedByUser) logWarn(name, `process exited (${describeExit(this.exitInfo)})`);
+      if (!this.closedByUser) logWarn(options.name, `process exited (${describeExit(this.exitInfo)})`);
     });
 
     connection.closed.then(
@@ -211,34 +220,29 @@ export class AcpClient {
       logWarn(options.name, `process error: ${error.message}`);
     });
 
-    const queues = new Map<string, UpdateQueue>();
-    const turns = new Map<string, TurnState>();
-    const configs = new Map<string, readonly SessionConfigOption[]>();
-    const modes = new Map<string, SessionModeState>();
-    const commands = new Map<string, readonly AvailableCommand[]>();
-    const titles = new Map<string, string>();
-    const pending = new Map<string, SessionUpdate[]>();
-    const recorders = new Map<string, SessionUpdate[]>();
-    const replaying = new Set<string>();
+    const sessions = new Map<string, SessionState>();
     const usage: ContextWindow = {};
 
     const remember = (sessionId: string, update: SessionUpdate): void => {
       switch (update.sessionUpdate) {
         case "config_option_update":
-          configs.set(sessionId, update.configOptions);
+          sessionOf(sessions, sessionId).configs = update.configOptions;
           return;
         case "current_mode_update": {
-          const state = modes.get(sessionId);
-          if (state !== undefined) modes.set(sessionId, { ...state, currentModeId: update.currentModeId });
+          const session = sessions.get(sessionId);
+          if (session?.modes !== undefined) {
+            session.modes = { ...session.modes, currentModeId: update.currentModeId };
+          }
           return;
         }
         case "available_commands_update":
-          commands.set(sessionId, update.availableCommands);
+          sessionOf(sessions, sessionId).commands = update.availableCommands;
           return;
         case "session_info_update": {
+          const session = sessionOf(sessions, sessionId);
           const title = typeof update.title === "string" ? update.title.trim() : "";
-          if (title.length > 0) titles.set(sessionId, title);
-          else if (update.title === null) titles.delete(sessionId);
+          if (title.length > 0) session.title = title;
+          else if (update.title === null) session.title = undefined;
           return;
         }
         default:
@@ -257,11 +261,10 @@ export class AcpClient {
       update.sessionUpdate === "plan_removed";
 
     const buffered = (sessionId: string, update: SessionUpdate): void => {
-      if (replaying.has(sessionId)) return;
-      const items = pending.get(sessionId) ?? [];
-      items.push(update);
-      if (items.length > PENDING_LIMIT) items.splice(0, items.length - PENDING_LIMIT);
-      pending.set(sessionId, items);
+      const session = sessionOf(sessions, sessionId);
+      if (session.replaying) return;
+      session.pending.push(update);
+      if (session.pending.length > PENDING_LIMIT) session.pending.splice(0, session.pending.length - PENDING_LIMIT);
     };
 
     const app = client({ name: "opencode-acp" })
@@ -273,19 +276,17 @@ export class AcpClient {
 
         remember(params.sessionId, update);
 
-        const recorder = recorders.get(params.sessionId);
-        const queue = queues.get(params.sessionId);
-
-        if (recorder !== undefined) recorder.push(update);
-        if (queue !== undefined) {
-          queue.push(update);
+        const session = sessions.get(params.sessionId);
+        if (session?.recorder !== undefined) session.recorder.push(update);
+        if (session?.queue !== undefined) {
+          session.queue.push(update);
           return;
         }
-        if (recorder !== undefined) return;
+        if (session?.recorder !== undefined) return;
         if (bufferable(update)) buffered(params.sessionId, update);
       })
       .onRequest("session/request_permission", async ({ params }) => {
-        const turn = turns.get(params.sessionId);
+        const turn = sessions.get(params.sessionId)?.turn;
         if (turn === undefined) return declinePermission(params);
 
         if (turn.controller.signal.aborted) return cancelledPermission();
@@ -316,7 +317,7 @@ export class AcpClient {
       })
       .onRequest("elicitation/create", async ({ params }) => {
         const sessionId = elicitationSession(params);
-        const turn = sessionId === undefined ? undefined : turns.get(sessionId);
+        const turn = sessionId === undefined ? undefined : sessions.get(sessionId)?.turn;
 
         if (turn === undefined) {
           logInfo(options.name, "declined an elicitation outside a running turn");
@@ -362,24 +363,7 @@ export class AcpClient {
         { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
       );
 
-      const acp = new AcpClient(
-        child,
-        connection,
-        initialize,
-        queues,
-        turns,
-        configs,
-        modes,
-        commands,
-        titles,
-        pending,
-        recorders,
-        replaying,
-        options.name,
-        options.displayName ?? options.name,
-        options.command,
-        usage,
-      );
+      const acp = new AcpClient(child, connection, initialize, options, sessions, usage);
       return acp;
     } catch (error) {
       connection.close();
@@ -471,10 +455,11 @@ export class AcpClient {
       { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
     );
 
-    this.configs.set(response.sessionId, response.configOptions ?? []);
-    this.rememberModes(response.sessionId, response.modes);
-    this.loaded.add(response.sessionId);
-    this.owned.add(response.sessionId);
+    const session = this.session(response.sessionId);
+    session.configs = response.configOptions ?? [];
+    this.rememberModes(session, response.modes);
+    session.loaded = true;
+    session.owned = true;
     return response.sessionId;
   }
 
@@ -493,9 +478,10 @@ export class AcpClient {
       { cancellationSignal: AbortSignal.timeout(RESUME_TIMEOUT_MS), stopWaitingOnCancel: true },
     );
 
-    this.configs.set(sessionId, response.configOptions ?? []);
-    this.rememberModes(sessionId, response.modes);
-    this.loaded.add(sessionId);
+    const session = this.session(sessionId);
+    session.configs = response.configOptions ?? [];
+    this.rememberModes(session, response.modes);
+    session.loaded = true;
   }
 
   /** Lists the agent's stored sessions, following cursors up to a safety bound. */
@@ -542,8 +528,9 @@ export class AcpClient {
   async loadSession(sessionId: string, cwd: string, capture?: SessionUpdate[]): Promise<void> {
     if (this.isClosed) throw this.closedError();
 
-    if (capture !== undefined) this.recorders.set(sessionId, capture);
-    else this.replaying.add(sessionId);
+    const session = this.session(sessionId);
+    if (capture !== undefined) session.recorder = capture;
+    else session.replaying = true;
     try {
       const response = await this.connection.agent.request(
         "session/load",
@@ -551,14 +538,12 @@ export class AcpClient {
         { cancellationSignal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS), stopWaitingOnCancel: true },
       );
 
-      this.configs.set(sessionId, response.configOptions ?? []);
-      this.rememberModes(sessionId, response.modes);
-      this.loaded.add(sessionId);
+      session.configs = response.configOptions ?? [];
+      this.rememberModes(session, response.modes);
+      session.loaded = true;
     } finally {
-      if (capture !== undefined && this.recorders.get(sessionId) === capture) {
-        this.recorders.delete(sessionId);
-      }
-      this.replaying.delete(sessionId);
+      if (capture !== undefined && session.recorder === capture) session.recorder = undefined;
+      session.replaying = false;
     }
   }
 
@@ -585,22 +570,22 @@ export class AcpClient {
 
   /** Latest configuration options reported for a session, or an empty list if none are known. */
   configOptions(sessionId: string): readonly SessionConfigOption[] {
-    return this.configs.get(sessionId) ?? [];
+    return this.sessions.get(sessionId)?.configs ?? [];
   }
 
   /** Legacy mode state reported by `session/new`, `session/load` or `current_mode_update`. */
   modes(sessionId: string): SessionModeState | undefined {
-    return this.modeStates.get(sessionId);
+    return this.sessions.get(sessionId)?.modes;
   }
 
   /** Commands advertised by the agent, empty until `available_commands_update` arrives. */
   commands(sessionId: string): readonly AvailableCommand[] {
-    return this.commandLists.get(sessionId) ?? [];
+    return this.sessions.get(sessionId)?.commands ?? [];
   }
 
   /** Latest title reported through `session_info_update`. */
   title(sessionId: string): string | undefined {
-    return this.titles.get(sessionId);
+    return this.sessions.get(sessionId)?.title;
   }
 
   /**
@@ -621,7 +606,7 @@ export class AcpClient {
       { cancellationSignal: AbortSignal.timeout(CONFIG_TIMEOUT_MS), stopWaitingOnCancel: true },
     );
 
-    this.configs.set(sessionId, response.configOptions);
+    this.session(sessionId).configs = response.configOptions;
     return response.configOptions;
   }
 
@@ -635,8 +620,8 @@ export class AcpClient {
       { cancellationSignal: AbortSignal.timeout(MODE_TIMEOUT_MS), stopWaitingOnCancel: true },
     );
 
-    const state = this.modeStates.get(sessionId);
-    if (state !== undefined) this.modeStates.set(sessionId, { ...state, currentModeId: modeId });
+    const state = this.sessions.get(sessionId)?.modes;
+    if (state !== undefined) this.session(sessionId).modes = { ...state, currentModeId: modeId };
   }
 
   /**
@@ -656,7 +641,7 @@ export class AcpClient {
 
     const sessionId = created.sessionId;
     // Created here, so `closeSession` may delete it on agents without `session/close`.
-    this.owned.add(sessionId);
+    this.session(sessionId).owned = true;
     const initial = created.configOptions ?? [];
 
     const models: CatalogModel[] = [];
@@ -703,7 +688,7 @@ export class AcpClient {
    * only released locally: deleting them would destroy the user's history.
    */
   async closeSession(sessionId: string): Promise<void> {
-    const owned = this.owned.has(sessionId);
+    const owned = this.sessions.get(sessionId)?.owned === true;
     this.forget(sessionId);
     if (this.isClosed) return;
 
@@ -730,7 +715,7 @@ export class AcpClient {
 
   /** Whether this process has created or loaded the ACP session. */
   hasSession(sessionId: string): boolean {
-    return this.loaded.has(sessionId);
+    return this.sessions.get(sessionId)?.loaded === true;
   }
 
   /**
@@ -765,12 +750,13 @@ export class AcpClient {
       pending: new Set(),
     };
 
-    this.queues.set(sessionId, queue);
-    this.turns.set(sessionId, turn);
+    const session = this.session(sessionId);
+    session.queue = queue;
+    session.turn = turn;
 
     // Session-level updates that arrived between turns belong to this turn.
-    for (const update of this.pending.get(sessionId) ?? []) queue.push(update);
-    this.pending.delete(sessionId);
+    for (const update of session.pending) queue.push(update);
+    session.pending = [];
 
     let done = false;
     let cancelled = false;
@@ -781,8 +767,8 @@ export class AcpClient {
       done = true;
       if (grace !== undefined) clearTimeout(grace);
       signal?.removeEventListener("abort", cancel);
-      this.queues.delete(sessionId);
-      if (this.turns.get(sessionId) === turn) this.turns.delete(sessionId);
+      if (session.queue === queue) session.queue = undefined;
+      if (session.turn === turn) session.turn = undefined;
       this.releasePending(turn);
       if (!controller.signal.aborted) controller.abort();
 
@@ -851,20 +837,12 @@ export class AcpClient {
 
   /** Drops everything learned about one ACP session. */
   private forget(sessionId: string): void {
-    this.loaded.delete(sessionId);
-    this.owned.delete(sessionId);
-    this.configs.delete(sessionId);
-    this.modeStates.delete(sessionId);
-    this.commandLists.delete(sessionId);
-    this.titles.delete(sessionId);
-    this.pending.delete(sessionId);
-    this.replaying.delete(sessionId);
-    this.recorders.delete(sessionId);
+    this.sessions.delete(sessionId);
   }
 
   /** Answers pending permission requests with `cancelled` before the turn ends. */
   private abortTurn(sessionId: string): void {
-    const turn = this.turns.get(sessionId);
+    const turn = this.sessions.get(sessionId)?.turn;
     if (turn === undefined) return;
 
     if (!turn.controller.signal.aborted) turn.controller.abort();
@@ -877,24 +855,21 @@ export class AcpClient {
   }
 
   private reset(): void {
-    this.queues.clear();
-    this.recorders.clear();
-    this.pending.clear();
-    this.replaying.clear();
-    this.modeStates.clear();
-    this.commandLists.clear();
-    this.titles.clear();
-    this.owned.clear();
-    for (const turn of this.turns.values()) {
+    for (const session of this.sessions.values()) {
+      const turn = session.turn;
+      if (turn === undefined) continue;
       if (!turn.controller.signal.aborted) turn.controller.abort();
       this.releasePending(turn);
     }
-    this.turns.clear();
+    this.sessions.clear();
   }
 
-  private rememberModes(sessionId: string, state: SessionModeState | null | undefined): void {
-    if (state === null || state === undefined) this.modeStates.delete(sessionId);
-    else this.modeStates.set(sessionId, state);
+  private session(sessionId: string): SessionState {
+    return sessionOf(this.sessions, sessionId);
+  }
+
+  private rememberModes(session: SessionState, state: SessionModeState | null | undefined): void {
+    session.modes = state ?? undefined;
   }
 }
 
