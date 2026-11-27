@@ -146,11 +146,10 @@ export class PermissionBroker {
       }
 
       if (first.kind === "settled") {
+        const detail = first.result.allowed ? "" : `: ${message(first.result.error)}`;
         logInfo(
           "acp",
-          `approval ${first.result.allowed ? "allowed" : "rejected"} without waiting for a card reply${
-            first.result.allowed ? "" : `: ${message(first.result.error)}`
-          }`,
+          `approval ${first.result.allowed ? "allowed" : "rejected"} without waiting for a card reply${detail}`,
         );
         return first.result.allowed ? option(params, "allow") : option(params, "reject");
       }

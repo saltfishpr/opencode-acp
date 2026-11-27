@@ -54,15 +54,10 @@ export function Settings() {
         return { connection: target, settings };
       } catch (error) {
         const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
-        return {
-          connection: target,
-          error:
-            type === "rpc.unavailable"
-              ? "unavailable"
-              : type === "rpc.method_not_found"
-                ? "updatePlugin"
-                : "loadFailed",
-        };
+        let loadError: LoadError = "loadFailed";
+        if (type === "rpc.unavailable") loadError = "unavailable";
+        else if (type === "rpc.method_not_found") loadError = "updatePlugin";
+        return { connection: target, error: loadError };
       }
     },
   );

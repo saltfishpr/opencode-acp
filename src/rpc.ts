@@ -4,6 +4,9 @@ import { LOG_LEVELS } from "./log.js";
 
 export const AGENT_ID = /^[a-z0-9][a-z0-9-]*$/;
 
+/** Optimistic-concurrency counter shared by the settings views and mutations. */
+const RevisionSchema = z.number().int().min(0);
+
 const AgentInputSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -35,7 +38,7 @@ const AgentViewSchema = z.strictObject({
 export type AgentView = z.infer<typeof AgentViewSchema>;
 
 const SettingsViewSchema = z.strictObject({
-  revision: z.number().int().min(0),
+  revision: RevisionSchema,
   logLevel: z.enum(LOG_LEVELS),
   agents: z.array(AgentViewSchema),
 });
@@ -161,9 +164,6 @@ const SetSessionOptionInputSchema = z.strictObject({
 });
 export type SetSessionOptionInput = z.infer<typeof SetSessionOptionInputSchema>;
 
-const ClaimElicitationInputSchema = z.strictObject({ requestID: z.string() });
-export type ClaimElicitationInput = z.infer<typeof ClaimElicitationInputSchema>;
-
 const AnswerElicitationInputSchema = z.strictObject({
   requestID: z.string(),
   action: z.enum(["accept", "cancel", "decline"]),
@@ -223,7 +223,7 @@ export type ElicitationRequestView = z.infer<typeof ElicitationRequestSchema>;
 const ElicitationRequestIDSchema = z.strictObject({ requestID: z.string() });
 
 const TargetSchema = z.strictObject({
-  revision: z.number().int().min(0),
+  revision: RevisionSchema,
   id: z.string(),
 });
 
@@ -239,7 +239,7 @@ export const AcpSettings = Rpc.define({
     settings: { input: EmptyInputSchema, output: SettingsViewSchema },
     saveAgent: {
       input: z.strictObject({
-        revision: z.number().int().min(0),
+        revision: RevisionSchema,
         create: z.boolean(),
         agent: AgentInputSchema,
       }),
@@ -247,7 +247,7 @@ export const AcpSettings = Rpc.define({
     },
     setEnabled: {
       input: z.strictObject({
-        revision: z.number().int().min(0),
+        revision: RevisionSchema,
         id: z.string(),
         enabled: z.boolean(),
       }),
@@ -257,7 +257,7 @@ export const AcpSettings = Rpc.define({
     retryAgent: { input: TargetSchema, output: MutationResultSchema },
     setLogLevel: {
       input: z.strictObject({
-        revision: z.number().int().min(0),
+        revision: RevisionSchema,
         logLevel: z.enum(LOG_LEVELS),
       }),
       output: MutationResultSchema,
@@ -288,7 +288,7 @@ export const AcpSettings = Rpc.define({
       output: MutationResultSchema,
     },
     claimElicitation: {
-      input: ClaimElicitationInputSchema,
+      input: ElicitationRequestIDSchema,
       output: z.strictObject({ claimed: z.boolean() }),
     },
     answerElicitation: {

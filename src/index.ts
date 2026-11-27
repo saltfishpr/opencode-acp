@@ -260,7 +260,6 @@ export default Plugin.define({
 type Availability =
   | {
       readonly phase: "running";
-      readonly reason: "";
       readonly exited: boolean;
       readonly agent: AgentState;
     }
@@ -286,7 +285,7 @@ function availability(agent: AgentConfig, active: AgentState | undefined): Avail
     return { phase: "stopped", reason: exited ? "exited" : "notRunning", exited };
   }
   if (active.status === "discovering") return { phase: "discovering", reason: "discovering", exited };
-  return { phase: "running", reason: "", exited, agent: active };
+  return { phase: "running", exited, agent: active };
 }
 
 function settingsView(): SettingsView {
@@ -298,14 +297,10 @@ function settingsView(): SettingsView {
       const { id, name, command, args, env, enabled } = agent;
       const active = running.get(id);
       const current = availability(agent, active);
-      const status: AgentStatus =
-        current.phase === "running"
-          ? "ready"
-          : current.phase === "stopped"
-            ? current.exited
-              ? "failed"
-              : (active?.status ?? "missing")
-            : current.phase;
+      let status: AgentStatus;
+      if (current.phase === "running") status = "ready";
+      else if (current.phase === "stopped") status = current.exited ? "failed" : (active?.status ?? "missing");
+      else status = current.phase;
       return {
         id,
         name,
@@ -487,9 +482,10 @@ async function prepareImport(
   const agent = state.config.agents.find((item) => item.id === agentID);
   if (agent === undefined) return failed("notFound", "agent");
 
-  const active = running.get(agentID);
-  const unavailable = unavailableReason(agent, active);
-  if (unavailable !== undefined || active === undefined) return failed("unavailable", unavailable ?? "notRunning");
+  const current = availability(agent, running.get(agentID));
+  if (current.phase !== "running") return failed("unavailable", current.reason);
+
+  const active = current.agent;
   if ((active.catalog?.models.length ?? 0) === 0) return failed("unavailable", "noModels");
 
   let client: AcpClient;
@@ -704,10 +700,8 @@ async function resolveAcpSession(
     return { status: "unavailable" };
   }
 
-  if (!client.hasSession(binding.sessionId)) {
-    const restored = await restoreSession(client, binding.sessionId, binding.cwd);
-    if (!restored.restored) return { status: "unavailable" };
-  }
+  const restored = await restoreSession(client, binding.sessionId, binding.cwd);
+  if (!restored.restored) return { status: "unavailable" };
 
   return { client, sessionId: binding.sessionId };
 }
@@ -873,11 +867,6 @@ async function applySessionOption(
 
 function newSessionID(): string {
   return `ses_${crypto.randomUUID().replaceAll("-", "")}`;
-}
-
-function unavailableReason(agent: AgentConfig, active: AgentState | undefined): string | undefined {
-  const current = availability(agent, active);
-  return current.phase === "running" ? undefined : current.reason;
 }
 
 async function sessionExists(ctx: Plugin.Context, sessionID: string): Promise<boolean> {

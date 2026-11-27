@@ -9,8 +9,6 @@ import type { AcpTurnContext } from "../acp/client.js";
 import { logWarn } from "../log.js";
 import type { ElicitationField, ElicitationRequestView } from "../rpc.js";
 
-export type { ElicitationField, ElicitationRequestView } from "../rpc.js";
-
 export interface ElicitationEmitter {
   request(view: ElicitationRequestView): void;
   cancelled(requestID: string): void | Promise<void>;

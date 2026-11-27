@@ -185,13 +185,9 @@ export function ImportSessions(props: { close(): void }) {
         return;
       }
 
-      setError(
-        outcome.status === "unsupported"
-          ? ctx.t("import.error.deleteUnsupported")
-          : outcome.status === "conflict"
-            ? ctx.t("import.error.deleteConflict")
-            : ctx.t("import.error.deleteFailed"),
-      );
+      if (outcome.status === "unsupported") setError(ctx.t("import.error.deleteUnsupported"));
+      else if (outcome.status === "conflict") setError(ctx.t("import.error.deleteConflict"));
+      else setError(ctx.t("import.error.deleteFailed"));
     } catch (cause) {
       const type = typeof cause === "object" && cause !== null && "type" in cause ? cause.type : undefined;
       setError(

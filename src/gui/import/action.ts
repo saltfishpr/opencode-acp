@@ -24,13 +24,13 @@ export async function importSession(
     );
 
     if (prepared.status !== "ok" || prepared.payload === undefined) {
-      input.fail(
-        prepared.status === "ok"
-          ? ctx.t("import.error.importFailed")
-          : prepared.status === "notFound" && prepared.reason === "directoryMissing"
-            ? ctx.t("import.error.directoryMissing")
-            : ctx.t(`import.error.${prepared.status}`),
-      );
+      if (prepared.status === "ok") {
+        input.fail(ctx.t("import.error.importFailed"));
+      } else if (prepared.status === "notFound" && prepared.reason === "directoryMissing") {
+        input.fail(ctx.t("import.error.directoryMissing"));
+      } else {
+        input.fail(ctx.t(`import.error.${prepared.status}`));
+      }
       if (prepared.status === "alreadyBound" || prepared.status === "notFound") input.reload();
       return;
     }

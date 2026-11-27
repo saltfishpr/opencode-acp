@@ -1,7 +1,6 @@
 import type { Cleanup, ServerRef } from "@opencode/plugin/gui";
 import { createEffect } from "solid-js";
-import type { ElicitationRequestView } from "../../interaction/elicitation.js";
-import { AcpSettings } from "../../rpc.js";
+import { AcpSettings, type ElicitationRequestView } from "../../rpc.js";
 import type { GuiContext } from "../definition.js";
 
 /** How often the bridge re-reads the form the user is filling in. */
@@ -112,11 +111,11 @@ function attach(ctx: GuiContext, server: ServerRef): Cleanup {
     active.set(request.requestID, state);
 
     try {
-      const claimed = (await rpc.claimElicitation(
+      const claimed = await rpc.claimElicitation(
         { requestID: request.requestID },
         { location: { directory: request.directory } },
-      )) as { claimed?: boolean };
-      if (claimed.claimed !== true) return;
+      );
+      if (!claimed.claimed) return;
 
       const created = await form().create({
         sessionID: request.sessionID,
