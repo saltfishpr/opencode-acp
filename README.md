@@ -24,22 +24,21 @@
 
 ## 安装
 
-本插件目前通过本地目录加载，未发布到 npm。获取代码后，在插件根目录执行：
+本插件通过 Git 仓库分发。在需要加载插件的机器上执行：
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm build
+opencode plugin add github:saltfishpr/opencode-acp
 ```
 
-将插件目录放在 `~/.config/opencode/plugins/` 下即可被 OpenCode 自动识别。如果放在其他路径，在 `opencode.json` 或 `opencode.jsonc` 中添加插件目录的绝对路径：
+需要跟随 `master` 自动更新时使用：
 
-```jsonc
-{
-  "plugins": ["/absolute/path/to/opencode-acp"],
-}
+```bash
+opencode plugin add github:saltfishpr/opencode-acp#master
 ```
 
-如果连接了远端服务器，也需要在对应服务器上完成上述安装。
+不带分支时固定在安装时的版本，之后运行 `opencode plugin update` 更新。OpenCode 会自动安装插件的运行依赖。
+
+`opencode plugin add` 会把插件写入全局配置 `~/.config/opencode/opencode.json(c)`。Desktop 只从全局配置加载插件界面，因此即使只在本机使用，也不要只把它加到项目配置里。连接了远端服务器时，需要在每台要运行 agent 的服务器上分别安装。
 
 ## 配置 Agent
 
@@ -128,3 +127,45 @@ pnpm build
 | 提示不支持导入历史                    | 升级服务器上的 OpenCode 版本后再试                                                                           |
 | Desktop 中看不到 **Settings › ACP**   | 确认本插件已安装在 Desktop 自己启动的本地服务器上，而不仅仅安装在远端服务器上                                |
 | 需要排查详细错误                      | 在 **Settings › ACP** 将「日志级别」调整为 `debug`，然后查看目标服务器的 OpenCode 日志                       |
+
+## 开发
+
+本插件通过 Git 仓库分发。日常使用只需按「安装」章节操作，以下内容仅供修改插件代码时参考。
+
+本地仓库不能和已安装的同一插件同时启用。两份代码的插件 `id` 都是 `opencode-acp`，宿主只会保留先加载的一份，另一份报 `Duplicate plugin ID`。开发时要把全局配置里的包条目换成本地目录，不要两份都保留。
+
+1. 把仓库放在任意目录，不要放在 `~/.config/opencode/plugins/` 下，否则会被自动发现并再加载一份。
+2. 安装开发依赖：
+
+   ```bash
+   pnpm install
+   ```
+
+3. 修改全局 `~/.config/opencode/opencode.json(c)`，把插件条目指向本地仓库的绝对路径：
+
+   ```jsonc
+   {
+     "plugins": ["/absolute/path/to/opencode-acp"],
+   }
+   ```
+
+   如果之前用 `opencode plugin add` 安装过，删除 `plugins` 里的包条目，避免两份同时加载。
+
+4. 启动 GUI 监听构建：
+
+   ```bash
+   pnpm dev
+   ```
+
+   - **GUI 改动**：每次重建后自动重新加载所有 Desktop 窗口和主进程里的插件界面，server 入口不会因此重启。
+   - **server / RPC 改动**：保存后由 OpenCode 的配置监听重载；没有生效时执行 `opencode service restart`。
+   - 修改 `src/rpc.ts` 同时影响 server 和 GUI，等两边都完成重载后再测试。
+
+5. 开发完成后，先删掉全局配置里的本地目录条目，再改回包条目并按需更新：
+
+   ```bash
+   opencode plugin add github:saltfishpr/opencode-acp
+   opencode plugin update
+   ```
+
+发布前请用安装后的包本身验证，不要只测本地目录副本。`src/index.ts` 由 OpenCode 直接加载，不需要预打包；`dist/gui-experimental.cjs` 必须随仓库提交，因为从 Git 安装不会执行 `vite build`。
