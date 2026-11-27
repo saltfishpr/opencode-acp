@@ -258,7 +258,12 @@ export default Plugin.define({
 });
 
 type Availability =
-  | { readonly phase: "running"; readonly reason: ""; readonly exited: boolean; readonly agent: AgentState }
+  | {
+      readonly phase: "running";
+      readonly reason: "";
+      readonly exited: boolean;
+      readonly agent: AgentState;
+    }
   | {
       readonly phase: "disabled" | "missing" | "discovering" | "failed" | "stopped";
       readonly reason: string;
