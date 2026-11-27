@@ -5,6 +5,7 @@ import { AcpStartError } from "./acp/errors.js";
 import { AcpClient } from "./acp/client.js";
 import { selectOption, valuesOf, type Catalog } from "./acp/catalog.js";
 import { AgentRuntime, findExecutable, type AgentState } from "./acp/runtime.js";
+import { restoreSession } from "./acp/session.js";
 import {
   EMPTY_CONFIG,
   PLUGIN_ID,
@@ -687,23 +688,8 @@ async function resolveAcpSession(
   }
 
   if (!client.hasSession(binding.sessionId)) {
-    if (client.canResumeSession) {
-      try {
-        await client.resumeSession(binding.sessionId, binding.cwd);
-      } catch (error) {
-        logWarn("acp", `could not resume ${binding.sessionId} for session settings: ${message(error)}`);
-      }
-    }
-
-    if (!client.hasSession(binding.sessionId)) {
-      if (!client.canLoadSession) return { status: "unavailable" };
-      try {
-        await client.loadSession(binding.sessionId, binding.cwd);
-      } catch (error) {
-        logWarn("acp", `could not load ${binding.sessionId} for session settings: ${message(error)}`);
-        return { status: "unavailable" };
-      }
-    }
+    const restored = await restoreSession(client, binding.sessionId, binding.cwd);
+    if (!restored.restored) return { status: "unavailable" };
   }
 
   return { client, sessionId: binding.sessionId };

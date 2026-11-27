@@ -12,6 +12,7 @@ import type { AcpClient, ElicitationHandler, PermissionHandler } from "../acp/cl
 import { explain } from "../acp/errors.js";
 import type { AgentRuntime } from "../acp/runtime.js";
 import { EMPTY_USAGE, noteUsageUpdate, usageOf, type TurnUsage } from "../acp/usage.js";
+import { restoreSession } from "../acp/session.js";
 import { logInfo, logWarn } from "../log.js";
 import type { SessionBindings } from "../session/binding.js";
 import type { SessionTitles } from "../session/title.js";
@@ -460,33 +461,13 @@ async function resolveSession(
   const binding = await deps.bindings.get(agentID, sessionID);
 
   if (binding !== undefined && binding.cwd === cwd) {
-    if (client.hasSession(binding.sessionId)) return { client, acpSessionID: binding.sessionId };
+    const restored = await restoreSession(client, binding.sessionId, cwd);
+    if (restored.restored) return { client, acpSessionID: binding.sessionId };
 
-    let failure: unknown;
-
-    // Resume is cheaper: the agent keeps the conversation but does not replay it.
-    if (client.canResumeSession) {
-      try {
-        await client.resumeSession(binding.sessionId, cwd);
-        return { client, acpSessionID: binding.sessionId };
-      } catch (error) {
-        failure = error;
-        logWarn("acp", `session/resume failed: ${message(error)}`);
-      }
-    }
-
-    if (client.canLoadSession) {
-      try {
-        await client.loadSession(binding.sessionId, cwd);
-        return { client, acpSessionID: binding.sessionId };
-      } catch (error) {
-        failure = error;
-        logWarn("acp", `session/load failed: ${message(error)}`);
-      }
-    }
-
-    if (failure !== undefined) {
-      warn(`未能恢复上一次的 ACP 会话（${explain(failure, client.failure)}），已新建会话；之前的上下文不在本轮内。`);
+    if (restored.failure !== undefined) {
+      warn(
+        `未能恢复上一次的 ACP 会话（${explain(restored.failure, client.failure)}），已新建会话；之前的上下文不在本轮内。`,
+      );
     }
   }
 
