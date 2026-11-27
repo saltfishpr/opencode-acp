@@ -10,7 +10,6 @@ interface EnvRow {
 }
 
 export function AgentForm(props: {
-  server: string;
   preset?: AgentInput;
   agent?: AgentView;
   close(): void;
@@ -76,7 +75,6 @@ export function AgentForm(props: {
             ? ctx.t("addPreset", { name: props.preset.name })
             : ctx.t("addCustom")
       }
-      description={ctx.t("runOn", { server: props.server })}
       footer={
         <>
           <ctx.ui.Button variant="ghost" disabled={saving()} onClick={props.close}>

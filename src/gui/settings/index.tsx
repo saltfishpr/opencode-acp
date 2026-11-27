@@ -135,7 +135,6 @@ export function Settings() {
     if (selectedID() !== id || pending() !== undefined) return;
     ctx.dialogs.open((dialog) => (
       <AgentForm
-        server={serverLabel(server)}
         preset={preset}
         agent={agent}
         close={dialog.close}
