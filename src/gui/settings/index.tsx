@@ -11,14 +11,7 @@ import {
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { LOG_LEVELS } from "../../log.js";
-import {
-  AcpSettings,
-  PRESETS,
-  type AgentInput,
-  type AgentView,
-  type MutationResult,
-  type SettingsView,
-} from "../../rpc.js";
+import { AcpRpc, PRESETS, type AgentInput, type AgentView, type MutationResult, type SettingsView } from "../../rpc.js";
 import { definition } from "../definition.js";
 import { retryUnavailable } from "../shared/location.js";
 import { ServerSwitcher } from "../shared/server-switcher.js";
@@ -51,7 +44,7 @@ export function Settings() {
     async (target): Promise<LoadResult> => {
       try {
         const settings = await retryUnavailable(() =>
-          target.client.rpc(AcpSettings).settings({}, { signal: AbortSignal.timeout(10_000) }),
+          target.client.rpc(AcpRpc).settings({}, { signal: AbortSignal.timeout(10_000) }),
         );
         return { connection: target, settings };
       } catch (error) {
@@ -98,7 +91,7 @@ export function Settings() {
   function rpcFor(id: string) {
     const server = ctx.servers.get(id);
     if (!server?.connected || !server.compatible) return;
-    return server.client.rpc(AcpSettings);
+    return server.client.rpc(AcpRpc);
   }
 
   async function run(

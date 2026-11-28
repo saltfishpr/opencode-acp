@@ -1,13 +1,12 @@
 import type {
   PermissionOption,
+  RequestPermissionOutcome,
   RequestPermissionRequest,
-  RequestPermissionResponse,
   ToolCall,
   ToolCallContent,
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import type { Plugin } from "@opencode/plugin";
-import type { AcpTurnContext } from "../acp/client.js";
 import { logInfo, logWarn } from "../log.js";
 
 type Decision = "allow" | "always" | "reject";
@@ -17,6 +16,16 @@ type Reply = "once" | "always" | "reject";
 
 /** How long to wait for the reply event after the assert settles. */
 const REPLY_EVENT_TIMEOUT_MS = 3_000;
+
+/** The OpenCode turn an ACP reverse request belongs to. */
+export interface TurnContext {
+  readonly sessionID: string;
+  readonly agentName: string;
+  /** Absolute working directory the ACP session was created with. */
+  readonly cwd: string;
+  /** Aborts when the turn is cancelled or ends. */
+  readonly signal: AbortSignal;
+}
 
 interface Waiter {
   readonly nonce: string;
@@ -67,22 +76,22 @@ export class PermissionBroker {
         if (typeof message === "string" && message.length > 0) event.message = message;
       })
       .catch((error: unknown) => {
-        logWarn("acp", `could not register the permission message hook: ${message(error)}`);
+        logWarn("acp", `could not register the permission message hook: ${messageOf(error)}`);
         return undefined;
       });
 
     void this.watch();
   }
 
-  /** Answers one ACP permission request and returns the option the agent should apply. */
-  async request(params: RequestPermissionRequest, turn: AcpTurnContext): Promise<RequestPermissionResponse> {
+  /** Answers one ACP permission request and returns the outcome the agent should apply. */
+  async request(params: RequestPermissionRequest, turn: TurnContext): Promise<RequestPermissionOutcome> {
     const target = targetOf(params.toolCall, turn.cwd);
     logInfo("acp", `approval requested for ${target.action}: ${target.resources.join(", ")}`);
 
     try {
       await this.ensureAsk(turn.sessionID, target.action);
     } catch (error) {
-      logWarn("acp", `could not add an ask rule for ${target.action}: ${message(error)}`);
+      logWarn("acp", `could not add an ask rule for ${target.action}: ${messageOf(error)}`);
       return cancelled();
     }
 
@@ -143,7 +152,7 @@ export class PermissionBroker {
       }
 
       if (first.kind === "settled") {
-        const detail = first.result.allowed ? "" : `: ${message(first.result.error)}`;
+        const detail = first.result.allowed ? "" : `: ${messageOf(first.result.error)}`;
         logInfo(
           "acp",
           `approval ${first.result.allowed ? "allowed" : "rejected"} without waiting for a card reply${detail}`,
@@ -188,7 +197,7 @@ export class PermissionBroker {
     void this.hook
       .then((registration) => registration?.dispose())
       .catch((error: unknown) => {
-        logWarn("acp", `could not dispose the permission message hook: ${message(error)}`);
+        logWarn("acp", `could not dispose the permission message hook: ${messageOf(error)}`);
       });
   }
 
@@ -249,7 +258,7 @@ export class PermissionBroker {
       }
     } catch (error) {
       if (!this.stop.signal.aborted) {
-        console.warn(`[acp] permission event stream stopped: ${message(error)}`);
+        console.warn(`[acp] permission event stream stopped: ${messageOf(error)}`);
       }
     }
   }
@@ -360,7 +369,7 @@ export function targetOf(tool: ToolCall | ToolCallUpdate, cwd: string): Target {
 }
 
 /** Chooses the ACP option that matches the user's decision. */
-export function option(params: RequestPermissionRequest, decision: Decision): RequestPermissionResponse {
+export function option(params: RequestPermissionRequest, decision: Decision): RequestPermissionOutcome {
   if (decision === "reject") {
     const reject =
       find(params.options, "reject_once") ??
@@ -392,12 +401,12 @@ function byName(options: readonly PermissionOption[], pattern: RegExp): Permissi
   return options.find((item) => pattern.test(`${item.kind} ${item.name}`));
 }
 
-function selected(option: PermissionOption): RequestPermissionResponse {
-  return { outcome: { outcome: "selected", optionId: option.optionId } };
+function selected(option: PermissionOption): RequestPermissionOutcome {
+  return { outcome: "selected", optionId: option.optionId };
 }
 
-function cancelled(): RequestPermissionResponse {
-  return { outcome: { outcome: "cancelled" } };
+function cancelled(): RequestPermissionOutcome {
+  return { outcome: "cancelled" };
 }
 
 /** Literal values only: a resource containing a wildcard would widen the saved rule. */
@@ -459,6 +468,6 @@ function pause(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function message(error: unknown): string {
+function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

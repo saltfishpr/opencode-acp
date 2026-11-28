@@ -7,19 +7,14 @@ export const AGENT_ID = /^[a-z0-9][a-z0-9-]*$/;
 /** Optimistic-concurrency counter shared by the settings views and mutations. */
 const RevisionSchema = z.number().int().min(0);
 
-const AgentInputSchema = z.strictObject({
-  id: z.string(),
-  name: z.string(),
-  command: z.string(),
-  args: z.array(z.string()),
-  /** Null keeps the value already stored on the server. */
-  env: z.record(z.string(), z.string().nullable()),
+const MutationResultSchema = z.strictObject({
+  status: z.enum(["ok", "conflict", "busy", "invalid", "duplicate", "notFound", "unsupported", "saveFailed"]),
+  field: z.string().optional(),
 });
-export type AgentInput = z.infer<typeof AgentInputSchema>;
+export type MutationResult = z.infer<typeof MutationResultSchema>;
 
-export const PRESETS = [
-  { id: "acp-agy", name: "Antigravity", command: "agy", args: ["acp"], env: {} },
-] as const satisfies readonly AgentInput[];
+const EmptyInputSchema = z.strictObject({});
+export type EmptyInput = z.infer<typeof EmptyInputSchema>;
 
 const AgentStatusSchema = z.enum(["disabled", "missing", "discovering", "ready", "failed"]);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
@@ -44,18 +39,69 @@ const SettingsViewSchema = z.strictObject({
 });
 export type SettingsView = z.infer<typeof SettingsViewSchema>;
 
-const ImportAgentStatusSchema = z.enum(["ready", "stopped", "unsupported", "unavailable", "disabled"]);
-export type ImportAgentStatus = z.infer<typeof ImportAgentStatusSchema>;
-
-const ImportableAgentSchema = z.strictObject({
+const AgentInputSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
-  status: ImportAgentStatusSchema,
-  reason: z.string(),
+  command: z.string(),
+  args: z.array(z.string()),
+  /** Null keeps the value already stored on the server. */
+  env: z.record(z.string(), z.string().nullable()),
 });
-export type ImportableAgent = z.infer<typeof ImportableAgentSchema>;
+export type AgentInput = z.infer<typeof AgentInputSchema>;
 
-const ImportableSessionSchema = z.strictObject({
+export const PRESETS = [
+  { id: "acp-agy", name: "Antigravity", command: "agy", args: ["acp"], env: {} },
+] as const satisfies readonly AgentInput[];
+
+const SaveAgentInputSchema = z.strictObject({
+  revision: RevisionSchema,
+  create: z.boolean(),
+  agent: AgentInputSchema,
+});
+export type SaveAgentInput = z.infer<typeof SaveAgentInputSchema>;
+
+const SetEnabledInputSchema = z.strictObject({
+  revision: RevisionSchema,
+  id: z.string(),
+  enabled: z.boolean(),
+});
+export type SetEnabledInput = z.infer<typeof SetEnabledInputSchema>;
+
+const AgentTargetInputSchema = z.strictObject({
+  revision: RevisionSchema,
+  id: z.string(),
+});
+export type AgentTargetInput = z.infer<typeof AgentTargetInputSchema>;
+
+const SetLogLevelInputSchema = z.strictObject({
+  revision: RevisionSchema,
+  logLevel: z.enum(LOG_LEVELS),
+});
+export type SetLogLevelInput = z.infer<typeof SetLogLevelInputSchema>;
+
+const SessionAgentStatusSchema = z.enum(["ready", "stopped", "unsupported", "unavailable", "disabled"]);
+export type SessionAgentStatus = z.infer<typeof SessionAgentStatusSchema>;
+
+const SessionAgentViewSchema = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  status: SessionAgentStatusSchema,
+  reason: z.string(),
+  canDelete: z.boolean(),
+});
+export type SessionAgentView = z.infer<typeof SessionAgentViewSchema>;
+
+const SessionAgentsViewSchema = z.strictObject({ agents: z.array(SessionAgentViewSchema) });
+export type SessionAgentsView = z.infer<typeof SessionAgentsViewSchema>;
+
+const ListSessionsInputSchema = z.strictObject({
+  agentID: z.string(),
+  /** Lists only this directory and its descendants when given. */
+  cwd: z.string().optional(),
+});
+export type ListSessionsInput = z.infer<typeof ListSessionsInputSchema>;
+
+const AgentSessionViewSchema = z.strictObject({
   agentID: z.string(),
   id: z.string(),
   title: z.string(),
@@ -63,56 +109,67 @@ const ImportableSessionSchema = z.strictObject({
   updatedAt: z.string(),
   available: z.boolean(),
 });
-export type ImportableSession = z.infer<typeof ImportableSessionSchema>;
+export type AgentSessionView = z.infer<typeof AgentSessionViewSchema>;
 
-const ImportAgentsViewSchema = z.strictObject({ agents: z.array(ImportableAgentSchema) });
-export type ImportAgentsView = z.infer<typeof ImportAgentsViewSchema>;
+const AgentSessionsViewSchema = z.strictObject({ sessions: z.array(AgentSessionViewSchema) });
+export type AgentSessionsView = z.infer<typeof AgentSessionsViewSchema>;
 
-const ImportSessionsViewSchema = z.strictObject({ sessions: z.array(ImportableSessionSchema) });
-export type ImportSessionsView = z.infer<typeof ImportSessionsViewSchema>;
+const SessionMetaInputSchema = z.strictObject({ sessionID: z.string() });
+export type SessionMetaInput = z.infer<typeof SessionMetaInputSchema>;
 
-const ImportableSessionsInputSchema = z.strictObject({
+const SessionMetaStatusSchema = z.enum(["ok", "notAcp", "unbound", "unavailable"]);
+export type SessionMetaStatus = z.infer<typeof SessionMetaStatusSchema>;
+
+const SessionMetaViewSchema = z.strictObject({
+  status: SessionMetaStatusSchema,
+  agentID: z.string().optional(),
+  acpSessionID: z.string().optional(),
+  cwd: z.string().optional(),
+  localUpdatedAt: z.string().optional(),
+  remoteUpdatedAt: z.string().optional(),
+});
+export type SessionMetaView = z.infer<typeof SessionMetaViewSchema>;
+
+const RebuildSessionInputSchema = z.strictObject({
   agentID: z.string(),
-  /** Lists only this directory and its descendants when given. */
+  acpSessionID: z.string(),
   cwd: z.string().optional(),
 });
-export type ImportableSessionsInput = z.infer<typeof ImportableSessionsInputSchema>;
+export type RebuildSessionInput = z.infer<typeof RebuildSessionInputSchema>;
 
-const ImportStatusSchema = z.enum([
-  "ok",
-  "notFound",
-  "unsupported",
-  "unavailable",
-  "alreadyBound",
-  "loadFailed",
-  "saveFailed",
-]);
-export type ImportStatus = z.infer<typeof ImportStatusSchema>;
+const RebuildSessionStatusSchema = z.enum(["ok", "notFound", "unsupported", "unavailable", "loadFailed"]);
+export type RebuildSessionStatus = z.infer<typeof RebuildSessionStatusSchema>;
 
-const ImportPayloadViewSchema = z.strictObject({
+const RebuiltPayloadViewSchema = z.strictObject({
   info: z.record(z.string(), z.unknown()),
   messages: z.array(z.record(z.string(), z.unknown())),
   location: z.strictObject({ directory: z.string() }),
 });
-export type ImportPayloadView = z.infer<typeof ImportPayloadViewSchema>;
+export type RebuiltPayloadView = z.infer<typeof RebuiltPayloadViewSchema>;
 
-const PrepareImportResultSchema = z.strictObject({
-  status: ImportStatusSchema,
+const RebuildSessionResultSchema = z.strictObject({
+  status: RebuildSessionStatusSchema,
   sessionID: z.string(),
   reason: z.string(),
-  payload: ImportPayloadViewSchema.optional(),
+  updatedAt: z.string(),
+  payload: RebuiltPayloadViewSchema.optional(),
 });
-export type PrepareImportResult = z.infer<typeof PrepareImportResultSchema>;
+export type RebuildSessionResult = z.infer<typeof RebuildSessionResultSchema>;
 
-const AbortImportInputSchema = z.strictObject({
+const DeleteSessionInputSchema = z.strictObject({
   agentID: z.string(),
   sessionID: z.string(),
-  opencodeSessionID: z.string(),
 });
-export type AbortImportInput = z.infer<typeof AbortImportInputSchema>;
+export type DeleteSessionInput = z.infer<typeof DeleteSessionInputSchema>;
 
-const SessionOptionStatusSchema = z.enum(["ok", "notAcp", "unbound", "unavailable", "invalid"]);
-export type SessionOptionStatus = z.infer<typeof SessionOptionStatusSchema>;
+const SessionStateInputSchema = z.strictObject({
+  sessionID: z.string(),
+  ensureLoaded: z.boolean().optional(),
+});
+export type SessionStateInput = z.infer<typeof SessionStateInputSchema>;
+
+const SessionStateStatusSchema = z.enum(["ok", "cached", "notAcp", "unbound", "unavailable"]);
+export type SessionStateStatus = z.infer<typeof SessionStateStatusSchema>;
 
 const SessionOptionValueViewSchema = z.strictObject({
   value: z.string(),
@@ -140,22 +197,31 @@ const SessionCommandViewSchema = z.strictObject({
 });
 export type SessionCommandView = z.infer<typeof SessionCommandViewSchema>;
 
-const SessionOptionsViewSchema = z.strictObject({
-  status: SessionOptionStatusSchema,
+const SessionStateViewSchema = z.strictObject({
+  status: SessionStateStatusSchema,
+  agentID: z.string().optional(),
+  agentName: z.string().optional(),
+  acpSessionID: z.string().optional(),
+  cwd: z.string().optional(),
   options: z.array(SessionOptionViewSchema),
-  /** Absent when the server predates command listing. */
-  commands: z.array(SessionCommandViewSchema).optional(),
-});
-export type SessionOptionsView = z.infer<typeof SessionOptionsViewSchema>;
-
-const SessionCommandsStatusSchema = z.enum(["ok", "cached", "notAcp", "unavailable"]);
-export type SessionCommandsStatus = z.infer<typeof SessionCommandsStatusSchema>;
-
-const SessionCommandsViewSchema = z.strictObject({
-  status: SessionCommandsStatusSchema,
   commands: z.array(SessionCommandViewSchema),
 });
-export type SessionCommandsView = z.infer<typeof SessionCommandsViewSchema>;
+export type SessionStateView = z.infer<typeof SessionStateViewSchema>;
+
+const SetSessionOptionInputSchema = z.strictObject({
+  sessionID: z.string(),
+  configID: z.string(),
+  value: z.union([z.string(), z.boolean()]),
+});
+export type SetSessionOptionInput = z.infer<typeof SetSessionOptionInputSchema>;
+
+const RunCommandInputSchema = z.strictObject({
+  sessionID: z.string(),
+  name: z.string(),
+  input: z.string(),
+  delivery: z.enum(["steer", "queue"]).optional(),
+});
+export type RunCommandInput = z.infer<typeof RunCommandInputSchema>;
 
 const RunCommandStatusSchema = z.enum(["ok", "notAcp", "notFound", "unavailable", "failed"]);
 export type RunCommandStatus = z.infer<typeof RunCommandStatusSchema>;
@@ -166,54 +232,12 @@ const RunCommandResultSchema = z.strictObject({
 });
 export type RunCommandResult = z.infer<typeof RunCommandResultSchema>;
 
-const RunCommandInputSchema = z.strictObject({
-  sessionID: z.string(),
-  name: z.string(),
-  input: z.string(),
-  delivery: z.enum(["steer", "queue"]).optional(),
-});
-export type RunCommandInput = z.infer<typeof RunCommandInputSchema>;
-
-const DeleteSessionInputSchema = z.strictObject({
-  agentID: z.string(),
-  sessionID: z.string(),
-});
-export type DeleteSessionInput = z.infer<typeof DeleteSessionInputSchema>;
-
-const SessionOptionsInputSchema = z.strictObject({ sessionID: z.string() });
-export type SessionOptionsInput = z.infer<typeof SessionOptionsInputSchema>;
-
-const SetSessionOptionInputSchema = z.strictObject({
-  sessionID: z.string(),
-  configID: z.string(),
-  value: z.union([z.string(), z.boolean()]),
-});
-export type SetSessionOptionInput = z.infer<typeof SetSessionOptionInputSchema>;
-
-const AnswerElicitationInputSchema = z.strictObject({
-  requestID: z.string(),
-  action: z.enum(["accept", "cancel", "decline"]),
-  content: z.record(z.string(), z.unknown()).optional(),
-});
-export type AnswerElicitationInput = z.infer<typeof AnswerElicitationInputSchema>;
-
-const ElicitationFormInputSchema = z.strictObject({
-  requestID: z.string(),
-  formID: z.string(),
-});
-export type ElicitationFormInput = z.infer<typeof ElicitationFormInputSchema>;
-
-const MutationResultSchema = z.strictObject({
-  status: z.enum(["ok", "conflict", "busy", "invalid", "duplicate", "notFound", "unsupported", "saveFailed"]),
-  field: z.string().optional(),
-});
-export type MutationResult = z.infer<typeof MutationResultSchema>;
-
 const ElicitationFieldOptionSchema = z.strictObject({
   value: z.string(),
   label: z.string(),
   description: z.string().optional(),
 });
+export type ElicitationFieldOption = z.infer<typeof ElicitationFieldOptionSchema>;
 
 const ElicitationFieldSchema = z.strictObject({
   key: z.string(),
@@ -234,7 +258,7 @@ const ElicitationFieldSchema = z.strictObject({
 });
 export type ElicitationField = z.infer<typeof ElicitationFieldSchema>;
 
-const ElicitationRequestSchema = z.strictObject({
+const ElicitationRequestViewSchema = z.strictObject({
   requestID: z.string(),
   sessionID: z.string(),
   directory: z.string(),
@@ -244,98 +268,56 @@ const ElicitationRequestSchema = z.strictObject({
   fields: z.array(ElicitationFieldSchema),
   toolCallID: z.string().optional(),
 });
-export type ElicitationRequestView = z.infer<typeof ElicitationRequestSchema>;
+export type ElicitationRequestView = z.infer<typeof ElicitationRequestViewSchema>;
 
 const ElicitationRequestIDSchema = z.strictObject({ requestID: z.string() });
+export type ElicitationRequestID = z.infer<typeof ElicitationRequestIDSchema>;
 
-const TargetSchema = z.strictObject({
-  revision: RevisionSchema,
-  id: z.string(),
+const ClaimElicitationResultSchema = z.strictObject({ claimed: z.boolean() });
+export type ClaimElicitationResult = z.infer<typeof ClaimElicitationResultSchema>;
+
+const AnswerElicitationInputSchema = z.strictObject({
+  requestID: z.string(),
+  action: z.enum(["accept", "cancel", "decline"]),
+  content: z.record(z.string(), z.unknown()).optional(),
 });
+export type AnswerElicitationInput = z.infer<typeof AnswerElicitationInputSchema>;
 
-const EmptyInputSchema = z.strictObject({});
+const ElicitationFormInputSchema = z.strictObject({
+  requestID: z.string(),
+  formID: z.string(),
+});
+export type ElicitationFormInput = z.infer<typeof ElicitationFormInputSchema>;
 
-export const AcpSettings = Rpc.define({
+const PendingElicitationsViewSchema = z.strictObject({
+  requests: z.array(ElicitationRequestViewSchema),
+});
+export type PendingElicitationsView = z.infer<typeof PendingElicitationsViewSchema>;
+
+export const AcpRpc = Rpc.define({
   id: "acp",
   events: {
-    elicitation: { schema: ElicitationRequestSchema },
+    elicitation: { schema: ElicitationRequestViewSchema },
     elicitationCancelled: { schema: ElicitationRequestIDSchema },
   },
   methods: {
     settings: { input: EmptyInputSchema, output: SettingsViewSchema },
-    saveAgent: {
-      input: z.strictObject({
-        revision: RevisionSchema,
-        create: z.boolean(),
-        agent: AgentInputSchema,
-      }),
-      output: MutationResultSchema,
-    },
-    setEnabled: {
-      input: z.strictObject({
-        revision: RevisionSchema,
-        id: z.string(),
-        enabled: z.boolean(),
-      }),
-      output: MutationResultSchema,
-    },
-    removeAgent: { input: TargetSchema, output: MutationResultSchema },
-    retryAgent: { input: TargetSchema, output: MutationResultSchema },
-    setLogLevel: {
-      input: z.strictObject({
-        revision: RevisionSchema,
-        logLevel: z.enum(LOG_LEVELS),
-      }),
-      output: MutationResultSchema,
-    },
-    importAgents: { input: EmptyInputSchema, output: ImportAgentsViewSchema },
-    importableSessions: {
-      input: ImportableSessionsInputSchema,
-      output: ImportSessionsViewSchema,
-    },
-    prepareImport: {
-      input: z.strictObject({ agentID: z.string(), sessionID: z.string() }),
-      output: PrepareImportResultSchema,
-    },
-    abortImport: {
-      input: AbortImportInputSchema,
-      output: MutationResultSchema,
-    },
-    deleteSession: {
-      input: DeleteSessionInputSchema,
-      output: MutationResultSchema,
-    },
-    sessionOptions: {
-      input: SessionOptionsInputSchema,
-      output: SessionOptionsViewSchema,
-    },
-    sessionCommands: {
-      input: SessionOptionsInputSchema,
-      output: SessionCommandsViewSchema,
-    },
-    runCommand: {
-      input: RunCommandInputSchema,
-      output: RunCommandResultSchema,
-    },
-    setSessionOption: {
-      input: SetSessionOptionInputSchema,
-      output: MutationResultSchema,
-    },
-    claimElicitation: {
-      input: ElicitationRequestIDSchema,
-      output: z.strictObject({ claimed: z.boolean() }),
-    },
-    answerElicitation: {
-      input: AnswerElicitationInputSchema,
-      output: MutationResultSchema,
-    },
-    elicitationForm: {
-      input: ElicitationFormInputSchema,
-      output: MutationResultSchema,
-    },
-    pendingElicitations: {
-      input: EmptyInputSchema,
-      output: z.strictObject({ requests: z.array(ElicitationRequestSchema) }),
-    },
+    saveAgent: { input: SaveAgentInputSchema, output: MutationResultSchema },
+    setEnabled: { input: SetEnabledInputSchema, output: MutationResultSchema },
+    removeAgent: { input: AgentTargetInputSchema, output: MutationResultSchema },
+    retryAgent: { input: AgentTargetInputSchema, output: MutationResultSchema },
+    setLogLevel: { input: SetLogLevelInputSchema, output: MutationResultSchema },
+    listAgents: { input: EmptyInputSchema, output: SessionAgentsViewSchema },
+    listSessions: { input: ListSessionsInputSchema, output: AgentSessionsViewSchema },
+    sessionMeta: { input: SessionMetaInputSchema, output: SessionMetaViewSchema },
+    rebuildSession: { input: RebuildSessionInputSchema, output: RebuildSessionResultSchema },
+    deleteSession: { input: DeleteSessionInputSchema, output: MutationResultSchema },
+    sessionState: { input: SessionStateInputSchema, output: SessionStateViewSchema },
+    setSessionOption: { input: SetSessionOptionInputSchema, output: MutationResultSchema },
+    runCommand: { input: RunCommandInputSchema, output: RunCommandResultSchema },
+    claimElicitation: { input: ElicitationRequestIDSchema, output: ClaimElicitationResultSchema },
+    answerElicitation: { input: AnswerElicitationInputSchema, output: MutationResultSchema },
+    elicitationForm: { input: ElicitationFormInputSchema, output: MutationResultSchema },
+    pendingElicitations: { input: EmptyInputSchema, output: PendingElicitationsViewSchema },
   },
 });

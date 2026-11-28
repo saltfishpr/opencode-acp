@@ -5,9 +5,9 @@ import type {
   ElicitationPropertySchema,
   ElicitationSchema,
 } from "@agentclientprotocol/sdk";
-import type { AcpTurnContext } from "../acp/client.js";
 import { logWarn } from "../log.js";
 import type { ElicitationField, ElicitationRequestView } from "../rpc.js";
+import type { TurnContext } from "./permission.js";
 
 export interface ElicitationEmitter {
   request(view: ElicitationRequestView): void;
@@ -54,11 +54,13 @@ export class ElicitationBroker {
     this.emitter = emitter;
   }
 
-  async request(params: CreateElicitationRequest, turn: AcpTurnContext): Promise<CreateElicitationResponse> {
+  async request(params: CreateElicitationRequest, turn: TurnContext): Promise<CreateElicitationResponse> {
     if (params.mode !== "form") return { action: "decline" };
 
-    const sessionID = elicitationSession(params);
-    if (sessionID === undefined) return { action: "decline" };
+    // The GUI creates the form through OpenCode's session API, which expects
+    // the OpenCode session ID. `params.sessionId` is the ACP session ID and
+    // would point at a session that OpenCode does not know.
+    const sessionID = turn.sessionID;
 
     const form = params as { requestedSchema?: ElicitationSchema; toolCallId?: unknown };
     const fields = toFormFields(form.requestedSchema);
@@ -189,12 +191,6 @@ export class ElicitationBroker {
       }),
     );
   }
-}
-
-/** The session an elicitation belongs to, when it is session-scoped. */
-export function elicitationSession(params: CreateElicitationRequest): string | undefined {
-  const sessionId = (params as { sessionId?: unknown }).sessionId;
-  return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
 }
 
 /** Maps an ACP form schema to the fields OpenCode's form API accepts. */

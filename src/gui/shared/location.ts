@@ -1,6 +1,6 @@
 import type { ServerRef } from "@opencode/plugin/gui";
 import type { Rpc } from "@opencode/plugin/rpc";
-import { AcpSettings } from "../../rpc.js";
+import { AcpRpc } from "../../rpc.js";
 
 const PROBE_TIMEOUT_MS = 5_000;
 const BACKOFF_MS = [0, 100, 200, 400, 800, 1600] as const;
@@ -19,7 +19,7 @@ function isLocationUnavailable(error: unknown): boolean {
   return errorType(error) === "rpc.unavailable";
 }
 
-/** The suffix of the `command.*` and `import.error.*` keys that explain a failed RPC. */
+/** The suffix of the `command.*` and `sessions.error.*` keys that explain a failed RPC. */
 export type RpcFailure = "updatePlugin" | "locationNotReady" | "requestFailed";
 
 /**
@@ -35,7 +35,7 @@ export function rpcFailure(error: unknown): RpcFailure {
 /**
  * The host boots a directory's location on demand and loads its plugins
  * asynchronously, so the first RPC into an unopened directory answers
- * `rpc.unavailable`. `importAgents` only reads plugin state, which makes it safe
+ * `rpc.unavailable`. `listAgents` only reads plugin state, which makes it safe
  * to probe until the plugin has registered its methods.
  */
 export async function waitForLocation(server: ServerRef, directory: string, signal?: AbortSignal): Promise<void> {
@@ -45,7 +45,7 @@ export async function waitForLocation(server: ServerRef, directory: string, sign
 
     const timeout = AbortSignal.timeout(PROBE_TIMEOUT_MS);
     try {
-      await server.client.rpc(AcpSettings).importAgents(
+      await server.client.rpc(AcpRpc).listAgents(
         {},
         {
           location: { directory },

@@ -1,113 +1,255 @@
 import { RequestError } from "@agentclientprotocol/sdk";
 
-/** Where starting an ACP agent failed. */
-export type AcpStartStage = "spawn" | "handshake";
-
-/** A spawn or handshake failure, kept distinguishable from agent-level errors. */
-export class AcpStartError extends Error {
-  constructor(
-    readonly stage: AcpStartStage,
-    readonly command: string,
-    readonly cause: unknown,
-    /** Set when the process exited before the handshake finished. */
-    readonly exit?: AcpExit,
-  ) {
-    super(cause instanceof Error ? cause.message : String(cause));
-    this.name = "AcpStartError";
-  }
-}
-
-/** How the agent process ended, when it did. */
-export interface AcpExit {
-  readonly code: number | null;
-  readonly signal: NodeJS.Signals | null;
-}
-
-export interface FailureContext {
-  /** The configured command, used in spawn errors. */
-  readonly command?: string;
-  /** Set when the process has already exited. */
-  readonly exit?: AcpExit;
-  /** True when the plugin closed the process itself, so an exit is not a failure. */
-  readonly closedByUser?: boolean;
-}
-
 /**
- * Turns an ACP, process or protocol error into a short Chinese explanation.
- *
- * Callers log the raw error separately; this string is what the assistant text
- * shows, so it names the next action where one exists.
+ * 所有 SDK 错误的基类。`code` 是稳定的程序化标识，`cause` 保留底层错误。
  */
-export function explain(error: unknown, context: FailureContext = {}): string {
-  if (error instanceof AcpStartError) return explainStart(error, context);
+export class AcpError extends Error {
+  readonly code: string;
 
-  if (error instanceof RequestError) {
-    if (error.code === -32000) {
-      return `远端 agent 尚未登录或没有可用凭据（${error.message}）。请先在终端运行一次该 CLI 完成登录，或在插件配置里补充凭据`;
-    }
-    if (error.code === -32002) {
-      return `远端 ACP 会话不存在或已失效（${error.message}），下一轮会新建会话`;
-    }
-    if (error.code === -32800) return "ACP 请求已取消";
-    return `${error.message}（ACP ${error.code}）`;
+  constructor(code: string, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = new.target.name;
+    this.code = code;
   }
-
-  if (isAbort(error)) {
-    return "等待 agent 响应超时（ACP 握手或会话请求超过了插件允许的时间）";
-  }
-
-  if (context.exit !== undefined && !context.closedByUser) {
-    return `ACP agent 进程已退出（${describeExit(context.exit)}），下一轮会重新启动`;
-  }
-
-  if (isEnoent(error)) {
-    const command = context.command ?? "配置里的 command";
-    return `找不到 agent 可执行文件 ${command}，请检查插件配置或安装对应 CLI`;
-  }
-
-  return `${message(error)}（详细日志见 server 输出中的 [acp] 行）`;
 }
 
-/** Log line for a process that ended on its own, outside a request. */
-export function describeExit(exit: AcpExit): string {
-  if (exit.signal !== null) return `signal ${exit.signal}`;
-  if (exit.code !== null) return `code ${exit.code}`;
-  return "unknown status";
+export class AcpSpawnError extends AcpError {
+  constructor(
+    readonly command: string,
+    readonly cwd: string,
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super("ACP_SPAWN_FAILED", `Failed to spawn "${command}" in "${cwd}": ${detail}`, {
+      cause,
+    });
+  }
 }
 
-function explainStart(error: AcpStartError, context: FailureContext): string {
-  if (error.stage === "spawn") {
-    if (isEnoent(error.cause)) {
-      return `找不到 agent 可执行文件 ${error.command}，请检查插件配置或安装对应 CLI`;
-    }
-    return `无法启动 agent（${error.command}）：${message(error.cause)}`;
+export class AcpInitializeTimeoutError extends AcpError {
+  constructor(readonly timeoutMs: number) {
+    super(
+      "ACP_INITIALIZE_TIMEOUT",
+      `ACP initialize did not complete within ${timeoutMs}ms`,
+    );
   }
-
-  const exit = error.exit ?? context.exit;
-  if (exit !== undefined && !context.closedByUser) {
-    return `agent 启动后未完成 ACP 握手就退出了（${describeExit(exit)}）。请确认 ${error.command} 能正常运行`;
-  }
-
-  if (isAbort(error.cause)) {
-    return `agent 启动后 60 秒内没有完成 ACP 握手（${error.command}）。网络不可达时请检查代理设置`;
-  }
-
-  return `与 agent 的 ACP 握手失败（${error.command}）：${message(error.cause)}`;
 }
 
-function isAbort(error: unknown): boolean {
+export class AcpTimeoutError extends AcpError {
+  constructor(
+    readonly method: string,
+    readonly timeoutMs: number,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      "ACP_REQUEST_TIMEOUT",
+      `ACP request "${method}" did not complete within ${timeoutMs}ms`,
+      options,
+    );
+  }
+}
+
+export class AcpProtocolVersionError extends AcpError {
+  constructor(
+    readonly received: number,
+    readonly supported: number,
+  ) {
+    super(
+      "ACP_UNSUPPORTED_PROTOCOL_VERSION",
+      `Agent selected ACP protocol version ${received}, but this client supports ${supported}`,
+    );
+  }
+}
+
+export class AcpProcessExitedError extends AcpError {
+  constructor(
+    readonly exitCode: number | null,
+    readonly signal: string | null,
+    readonly stderr: string,
+  ) {
+    const status =
+      exitCode !== null ? `code ${exitCode}` : signal ? `signal ${signal}` : "unknown status";
+    const tail = stderr.trim();
+    super(
+      "ACP_PROCESS_EXITED",
+      `ACP agent process exited (${status})${tail ? `: ${tail.slice(-2000)}` : ""}`,
+    );
+  }
+}
+
+export class AcpNotStartedError extends AcpError {
+  constructor() {
+    super("ACP_NOT_STARTED", "ACP client has not been started; call start() first");
+  }
+}
+
+export class AcpDisposedError extends AcpError {
+  constructor() {
+    super("ACP_DISPOSED", "ACP client has been disposed");
+  }
+}
+
+export class AcpUnsupportedCapabilityError extends AcpError {
+  constructor(readonly capability: string) {
+    super(
+      "ACP_UNSUPPORTED_CAPABILITY",
+      `The agent or client does not support ${capability}`,
+    );
+  }
+}
+
+export class AcpUnsupportedContentError extends AcpError {
+  constructor(
+    readonly contentType: string,
+    readonly capability: string,
+  ) {
+    super(
+      "ACP_UNSUPPORTED_CONTENT",
+      `Prompt content type "${contentType}" requires the agent capability ${capability}`,
+    );
+  }
+}
+
+export class AcpInvalidArgumentError extends AcpError {
+  constructor(message: string) {
+    super("ACP_INVALID_ARGUMENT", message);
+  }
+}
+
+export class AcpInvalidHostError extends AcpError {
+  constructor(message: string) {
+    super("ACP_INVALID_HOST", message);
+  }
+}
+
+export class AcpAuthRequiredError extends AcpError {
+  constructor(readonly data?: unknown, message = "The agent requires authentication") {
+    super("ACP_AUTH_REQUIRED", message);
+  }
+}
+
+export class AcpTerminalAuthError extends AcpError {
+  constructor(
+    readonly methodId: string,
+    readonly exitCode: number | null,
+    readonly signal: string | null,
+  ) {
+    super(
+      "ACP_TERMINAL_AUTH_FAILED",
+      `Terminal authentication method "${methodId}" failed (exit ${exitCode ?? "null"}, signal ${signal ?? "null"})`,
+    );
+  }
+}
+
+export class AcpPendingUpdatesOverflowError extends AcpError {
+  constructor(
+    readonly limit: number,
+    readonly bytes: number,
+  ) {
+    super(
+      "ACP_PENDING_UPDATES_OVERFLOW",
+      `Too many session updates arrived before session/new completed (${limit} updates / ${bytes} bytes)`,
+    );
+  }
+}
+
+export class AcpSessionBusyError extends AcpError {
+  constructor(message: string) {
+    super("ACP_SESSION_BUSY", message);
+  }
+}
+
+export class AcpReadOnlySessionError extends AcpError {
+  constructor(operation: string) {
+    super(
+      "ACP_READ_ONLY_SESSION",
+      `Subagent sessions are read-only; "${operation}" is not permitted`,
+    );
+  }
+}
+
+export class AcpSessionNotFoundError extends AcpError {
+  constructor(readonly sessionId: string) {
+    super("ACP_SESSION_NOT_FOUND", `Unknown ACP session "${sessionId}"`);
+  }
+}
+
+export class AcpUnknownConfigOptionError extends AcpError {
+  constructor(readonly configId: string) {
+    super("ACP_UNKNOWN_CONFIG_OPTION", `Unknown session config option "${configId}"`);
+  }
+}
+
+export class AcpPaginationError extends AcpError {
+  constructor(readonly cursor: string) {
+    super("ACP_PAGINATION_LOOP", `session/list repeated pagination cursor "${cursor}"`);
+  }
+}
+
+export class AcpCancelledError extends AcpError {
+  constructor(message = "ACP operation was cancelled") {
+    super("ACP_CANCELLED", message);
+  }
+}
+
+export class AcpRequestError extends AcpError {
+  constructor(
+    readonly method: string,
+    readonly rpcCode: number,
+    message: string,
+    readonly data?: unknown,
+    options?: { cause?: unknown },
+  ) {
+    super("ACP_REQUEST_FAILED", `ACP request "${method}" failed: ${message}`, options);
+  }
+}
+
+export class AcpProtocolError extends AcpError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super("ACP_PROTOCOL_ERROR", message, options);
+  }
+}
+
+export class AcpUnstableFeatureError extends AcpError {
+  constructor(feature: string) {
+    super(
+      "ACP_UNSTABLE_FEATURE_DISABLED",
+      `Unstable feature "${feature}" requires experimental.unstable to be enabled`,
+    );
+  }
+}
+
+export function isAuthRequiredError(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    (error.name === "AbortError" || error.name === "TimeoutError")
+    error instanceof RequestError &&
+    error.code === -32000 &&
+    (error.data === undefined ||
+      error.data === null ||
+      typeof error.data === "object")
   );
 }
 
-function isEnoent(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
+export function mapRequestError(method: string, error: unknown): AcpError {
+  if (error instanceof AcpError) {
+    return error;
+  }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof RequestError) {
+    if (isAuthRequiredError(error)) {
+      return new AcpAuthRequiredError(error.data, error.message);
+    }
+    return new AcpRequestError(method, error.code, error.message, error.data, {
+      cause: error,
+    });
+  }
+
+  if (error instanceof Error) {
+    return new AcpRequestError(method, -32603, error.message, undefined, {
+      cause: error,
+    });
+  }
+
+  return new AcpRequestError(method, -32603, String(error), undefined, {
+    cause: error,
+  });
 }
