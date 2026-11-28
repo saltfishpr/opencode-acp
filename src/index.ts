@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin";
-import { AgentHub, clearCatalog } from "./agent-hub.js";
+import { AgentManager, clearCatalog } from "./agents.js";
 import {
   EMPTY_CONFIG,
   PLUGIN_ID,
@@ -9,7 +9,7 @@ import {
   type AgentConfig,
   type Config,
 } from "./config.js";
-import { Coordinator, SessionTitles } from "./coordinator.js";
+import { SessionService, SessionTitles } from "./sessions.js";
 import { ElicitationBroker } from "./interaction/elicitation.js";
 import { PermissionBroker } from "./interaction/permission.js";
 import { logError, logWarn, setLogLevel } from "./log.js";
@@ -17,11 +17,11 @@ import { PACKAGE, registerProviders } from "./provider.js";
 import { AcpRpc, AGENT_ID, type MutationResult } from "./rpc.js";
 
 const SETTINGS_KEY = "acp/settings";
-const stateKey = Symbol.for("opencode-acp/server-state/v2");
+const stateKey = Symbol.for("opencode-acp/server-state/v3");
 
 interface ServerState {
   readonly locations: Map<Plugin.Context, ReadonlySet<string>>;
-  readonly hub: AgentHub;
+  readonly agents: AgentManager;
   /** Shared across locations so an imported title follows the session. */
   readonly titles: SessionTitles;
   readonly onExit: () => void;
@@ -34,12 +34,12 @@ const scope = globalThis as typeof globalThis & { [stateKey]?: ServerState };
 const state: ServerState = (scope[stateKey] ??= createState());
 
 function createState(): ServerState {
-  const hub = new AgentHub({ onProviderChange: () => void reloadProviders() });
+  const agents = new AgentManager({ onProviderChange: () => void reloadProviders() });
   return {
     locations: new Map(),
-    hub,
+    agents,
     titles: new SessionTitles(),
-    onExit: () => hub.stopAll(),
+    onExit: () => agents.stopAll(),
     config: EMPTY_CONFIG,
     queue: Promise.resolve(),
   };
@@ -50,10 +50,10 @@ export default Plugin.define({
   async setup(ctx) {
     const permissions = new PermissionBroker(ctx);
     const elicitations = new ElicitationBroker();
-    const coordinator = new Coordinator(state.hub, state.titles);
+    const sessions = new SessionService(state.agents, state.titles);
 
     const { registrations, occupied } = await registerProviders(ctx, {
-      hub: state.hub,
+      agents: state.agents,
       titles: state.titles,
       requestPermission: (params, turn) => permissions.request(params, turn),
       requestElicitation: (params, turn) => elicitations.request(params, turn),
@@ -65,7 +65,7 @@ export default Plugin.define({
           state.config = readConfig(await ctx.storage.get(SETTINGS_KEY));
           setLogLevel(state.config.logLevel);
           process.on("exit", state.onExit);
-          for (const agent of state.config.agents) await state.hub.startAgent(ctx, agent);
+          for (const agent of state.config.agents) await state.agents.startAgent(ctx, agent);
         }
         state.locations.set(ctx, occupied);
         await reloadProviders([ctx]);
@@ -78,7 +78,7 @@ export default Plugin.define({
 
     const rpc = await ctx.rpc.register(AcpRpc, {
       async settings() {
-        return enqueue(async () => state.hub.settingsView(state.config));
+        return enqueue(async () => state.agents.settingsView(state.config));
       },
       saveAgent({ revision, create, agent }) {
         return mutate(revision, async () => {
@@ -144,11 +144,11 @@ export default Plugin.define({
           const agent = state.config.agents.find((item) => item.id === id);
           if (agent === undefined) return { status: "notFound" };
           if (!agent.enabled) return { status: "conflict" };
-          const active = state.hub.get(id);
+          const active = state.agents.get(id);
           if (active?.status === "discovering") return { status: "ok" };
-          if (active !== undefined && !state.hub.pause(id)) return { status: "busy" };
-          state.hub.stopAgent(id);
-          await state.hub.startAgent(ctx, agent);
+          if (active !== undefined && !state.agents.pause(id)) return { status: "busy" };
+          state.agents.stopAgent(id);
+          await state.agents.startAgent(ctx, agent);
           await reloadProviders();
           return { status: "ok" };
         });
@@ -174,28 +174,28 @@ export default Plugin.define({
         });
       },
       listAgents() {
-        return Promise.resolve(coordinator.listAgents(state.config));
+        return Promise.resolve(sessions.listAgents(state.config));
       },
       listSessions(input) {
-        return coordinator.listSessions(state.config, input);
+        return sessions.listSessions(state.config, input);
       },
       sessionMeta(input) {
-        return coordinator.sessionMeta(ctx, state.config, input);
+        return sessions.sessionMeta(ctx, state.config, input);
       },
       rebuildSession(input) {
-        return coordinator.rebuildSession(ctx, state.config, input);
+        return sessions.rebuildSession(ctx, state.config, input);
       },
       deleteSession(input) {
-        return coordinator.deleteSession(state.config, input);
+        return sessions.deleteSession(state.config, input);
       },
       sessionState(input) {
-        return coordinator.sessionState(ctx, state.config, input);
+        return sessions.sessionState(ctx, state.config, input);
       },
       setSessionOption(input) {
-        return coordinator.setSessionOption(ctx, state.config, input);
+        return sessions.setSessionOption(ctx, state.config, input);
       },
       runCommand(input) {
-        return coordinator.runCommand(ctx, state.config, input);
+        return sessions.runCommand(ctx, state.config, input);
       },
       claimElicitation({ requestID }) {
         return Promise.resolve({ claimed: elicitations.claim(requestID) });
@@ -235,7 +235,7 @@ export default Plugin.define({
         state.locations.delete(ctx);
         if (state.locations.size === 0) {
           process.off("exit", state.onExit);
-          state.hub.stopAll();
+          state.agents.stopAll();
           state.titles.clear();
         }
       });
@@ -281,10 +281,10 @@ async function saveAgent(
   previous: AgentConfig | undefined,
   next: AgentConfig | undefined,
 ): Promise<MutationResult> {
-  const active = state.hub.get(id);
+  const active = state.agents.get(id);
   const launchChanged = previous !== undefined && next !== undefined && !sameLaunch(previous, next);
   const restart = launchChanged || previous?.enabled !== next?.enabled;
-  if (restart && active !== undefined && !state.hub.pause(id)) return { status: "busy" };
+  if (restart && active !== undefined && !state.agents.pause(id)) return { status: "busy" };
 
   try {
     const agents = state.config.agents.flatMap((agent) =>
@@ -293,13 +293,13 @@ async function saveAgent(
     if (previous === undefined && next !== undefined) agents.push(next);
     await persist(ctx, { ...state.config, agents });
   } catch (error) {
-    if (active !== undefined) state.hub.resume(id);
+    if (active !== undefined) state.agents.resume(id);
     throw error;
   }
 
   if (restart) {
-    state.hub.stopAgent(id);
-    if (next !== undefined) await state.hub.startAgent(ctx, next);
+    state.agents.stopAgent(id);
+    if (next !== undefined) await state.agents.startAgent(ctx, next);
   } else if (active !== undefined && next !== undefined) {
     active.agent = next;
   }

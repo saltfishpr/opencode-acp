@@ -14,10 +14,10 @@ import type {
 } from "@ai-sdk/provider";
 import { Model, Plugin, Provider } from "@opencode/plugin";
 import type { AcpClient, AcpSession, ConfigOption } from "./acp/index.js";
-import { catalogModes, selectConfigOption, type AgentHub } from "./agent-hub.js";
+import { catalogModes, selectConfigOption, type AgentManager } from "./agents.js";
 import type { TurnContext } from "./interaction/permission.js";
 import { logInfo, logWarn } from "./log.js";
-import { readAcpMetadata, writeAcpMetadata, type SessionTitles } from "./coordinator.js";
+import { readAcpMetadata, writeAcpMetadata, type SessionTitles } from "./sessions.js";
 import { buildResourceBlocks, lastUserPrompt, PromptFiles, type ResourceBlocks } from "./projector/media.js";
 import { EMPTY_USAGE, explainAcpError } from "./projector/model.js";
 import { streamSessionTurn, toStream } from "./projector/stream.js";
@@ -37,7 +37,7 @@ const CANCEL_TIMEOUT_MS = 5_000;
 const OTHER: LanguageModelV3FinishReason = { unified: "other", raw: "other" };
 
 export interface ProviderDeps {
-  readonly hub: AgentHub;
+  readonly agents: AgentManager;
   readonly titles: SessionTitles;
   readonly requestPermission: (
     params: RequestPermissionRequest,
@@ -71,7 +71,7 @@ export async function registerProviders(ctx: Plugin.Context, deps: ProviderDeps)
 
   const language = (info: Model.Info): LanguageModelV3 | undefined => {
     if (!registered.has(info.providerID)) return undefined;
-    const entry = deps.hub.get(info.providerID);
+    const entry = deps.agents.get(info.providerID);
     if (entry === undefined) return undefined;
 
     const thought = info.settings?.["acpThought"];
@@ -111,7 +111,7 @@ export async function registerProviders(ctx: Plugin.Context, deps: ProviderDeps)
         if (provider.package !== PACKAGE) occupied.add(provider.id);
       }
 
-      for (const [agentID, entry] of deps.hub.all()) {
+      for (const [agentID, entry] of deps.agents.all()) {
         const id = Provider.ID.make(agentID);
         const existing = editor.get(id);
         if (existing !== undefined && existing.provider.package !== PACKAGE) continue;
@@ -277,7 +277,7 @@ async function* run(
   // Rebuilds lock the ACP session, so turns must use the same key to exclude
   // each other.
   const lockKey = readAcpMetadata(info.metadata, info.location.directory)?.session ?? sessionID;
-  const lock = deps.hub.lock(deps.agentID, lockKey);
+  const lock = deps.agents.lock(deps.agentID, lockKey);
   if (lock === undefined) {
     yield* say("ACP agent 配置正在更新或已停用，请重新选择可用的模型后重试。");
     yield finish(OTHER, EMPTY_USAGE);
@@ -318,7 +318,7 @@ async function* turn(
   lockKey: string,
   hooks: TurnHooks,
 ): AsyncGenerator<LanguageModelV3StreamPart> {
-  const entry = deps.hub.get(deps.agentID);
+  const entry = deps.agents.get(deps.agentID);
   if (entry === undefined) {
     yield* say("ACP agent 已停止，请重新选择模型后重试。");
     yield finish(OTHER, EMPTY_USAGE);
@@ -331,7 +331,7 @@ async function* turn(
   let warning: string | undefined;
 
   try {
-    client = await deps.hub.ensureClient(deps.agentID);
+    client = await deps.agents.ensureClient(deps.agentID);
     const resolved = await resolveSession(client, sessionID, cwd, info.metadata, deps);
     session = resolved.session;
     warning = resolved.warning;
@@ -347,7 +347,7 @@ async function* turn(
   // session existed; also lock on `session.sessionId` so a follow-up turn or
   // rebuild waits if this turn is interrupted before the agent finishes cancelling.
   if (session.sessionId !== lockKey) {
-    const sessionLock = deps.hub.lock(deps.agentID, session.sessionId);
+    const sessionLock = deps.agents.lock(deps.agentID, session.sessionId);
     if (sessionLock === undefined) {
       yield* say("ACP agent 配置正在更新或已停用，请重新选择可用的模型后重试。");
       yield finish(OTHER, EMPTY_USAGE);
@@ -417,7 +417,7 @@ async function* turn(
     cwd,
     signal: controller.signal,
   };
-  const unregister = deps.hub.registerTurn(deps.agentID, session.sessionId, {
+  const unregister = deps.agents.registerTurn(deps.agentID, session.sessionId, {
     turn: turnContext,
     requestPermission: deps.requestPermission,
     requestElicitation: deps.requestElicitation,
@@ -436,7 +436,7 @@ async function* turn(
         if (!deps.titles.remember(sessionID, title)) return;
         void applyTitle(deps.ctx, sessionID, title, deps.firstPrompt(sessionID), previous);
       },
-      onContextWindow: (size) => deps.hub.noteContextWindow(deps.agentID, size),
+      onContextWindow: (size) => deps.agents.noteContextWindow(deps.agentID, size),
     });
   } finally {
     controller.abort();
@@ -512,7 +512,7 @@ async function resolveSession(
 
 async function createSession(client: AcpClient, sessionID: string, cwd: string, deps: TurnDeps): Promise<AcpSession> {
   const session = await client.newSession({ cwd });
-  await applyDefaultMode(session, deps.hub.get(deps.agentID)?.agent.defaultMode);
+  await applyDefaultMode(session, deps.agents.get(deps.agentID)?.agent.defaultMode);
   await writeAcpMetadata(deps.ctx, sessionID, {
     agent: deps.agentID,
     session: session.sessionId,

@@ -3,7 +3,7 @@ import type { Plugin } from "@opencode/plugin";
 import { statSync } from "node:fs";
 import type { AcpClient, AcpSession, ConfigOption } from "./acp/index.js";
 import { AcpSessionBusyError } from "./acp/index.js";
-import { catalogCommands, selectConfigOption, type AgentEntry, type AgentHub, type Catalog } from "./agent-hub.js";
+import { catalogCommands, selectConfigOption, type AgentEntry, type AgentManager, type Catalog } from "./agents.js";
 import type { AgentConfig, Config } from "./config.js";
 import { logInfo, logWarn } from "./log.js";
 import { buildRebuiltSession, type HistoryModel } from "./projector/history.js";
@@ -109,18 +109,18 @@ export async function writeAcpMetadata(ctx: Plugin.Context, sessionID: string, a
  * Owns ACP session metadata, SSOT history rebuilds and the session-level RPCs.
  * `metadata.acp` is the only binding source; there is no separate store.
  */
-export class Coordinator {
+export class SessionService {
   constructor(
-    private readonly hub: AgentHub,
+    private readonly agents: AgentManager,
     private readonly titles: SessionTitles,
   ) {}
 
   listAgents(config: Config): SessionAgentsView {
     return {
       agents: config.agents.map((agent) => {
-        const current = this.hub.availability(agent);
-        const canDelete = this.hub.canDelete(agent.id);
-        const entry = this.hub.get(agent.id);
+        const current = this.agents.availability(agent);
+        const canDelete = this.agents.canDelete(agent.id);
+        const entry = this.agents.get(agent.id);
 
         if (current.phase === "disabled") {
           return { id: agent.id, name: agent.name, status: "disabled", reason: "disabled", canDelete };
@@ -157,7 +157,7 @@ export class Coordinator {
     const agent = config.agents.find((item) => item.id === input.agentID);
     if (agent === undefined) return { sessions: [] };
 
-    const entry = this.hub.get(agent.id);
+    const entry = this.agents.get(agent.id);
     if (entry === undefined || entry.client?.state !== "ready") return { sessions: [] };
     const client = entry.client;
     if (client.agentCapabilities?.sessionCapabilities?.list == null) return { sessions: [] };
@@ -211,7 +211,7 @@ export class Coordinator {
     if (acp === undefined) return { status: "unbound", agentID };
 
     let remoteUpdatedAt: string | undefined;
-    const client = this.hub.get(agent.id)?.client;
+    const client = this.agents.get(agent.id)?.client;
     if (client?.state === "ready" && client.agentCapabilities?.sessionCapabilities?.list != null) {
       try {
         for await (const remote of client.listAllSessions({ cwd: acp.cwd })) {
@@ -258,13 +258,13 @@ export class Coordinator {
     const agent = config.agents.find((item) => item.id === input.agentID);
     if (agent === undefined) return failed("notFound", "agent");
 
-    const entry = this.hub.get(agent.id);
+    const entry = this.agents.get(agent.id);
     if (entry === undefined) return failed("unavailable", "notRunning");
     if ((entry.catalog?.models.length ?? 0) === 0) return failed("unavailable", "noModels");
 
     let client: AcpClient;
     try {
-      client = await this.hub.ensureClient(agent.id);
+      client = await this.agents.ensureClient(agent.id);
     } catch (error) {
       logWarn("acp", `could not start ${agent.id} for rebuild: ${message(error)}`);
       return failed("unavailable", "failed");
@@ -294,7 +294,7 @@ export class Coordinator {
     if (cwd === undefined) return failed("notFound", "session");
     if (!directoryExists(cwd)) return failed("notFound", "directoryMissing");
 
-    const lock = this.hub.lock(agent.id, input.acpSessionID);
+    const lock = this.agents.lock(agent.id, input.acpSessionID);
     if (lock === undefined) return failed("unavailable", "busy");
     const release = await lock;
 
@@ -379,11 +379,11 @@ export class Coordinator {
         agentID,
         agentName: agent.name,
         options: [],
-        commands: [...(this.hub.get(agent.id)?.catalog?.commands ?? [])],
+        commands: [...(this.agents.get(agent.id)?.catalog?.commands ?? [])],
       };
     }
 
-    const entry = this.hub.get(agent.id);
+    const entry = this.agents.get(agent.id);
     if (entry === undefined) {
       return {
         status: "unavailable",
@@ -404,7 +404,7 @@ export class Coordinator {
 
     if (input.ensureLoaded === true) {
       try {
-        client = await this.hub.ensureClient(agent.id);
+        client = await this.agents.ensureClient(agent.id);
         session = await loadOrResume(client, acp.session, acp.cwd);
       } catch (error) {
         logWarn("acp", `could not load ${acp.session} for session state: ${message(error)}`);
@@ -434,7 +434,7 @@ export class Coordinator {
       return { status: "notFound" };
     }
 
-    const client = this.hub.get(state.agentID)?.client;
+    const client = this.agents.get(state.agentID)?.client;
     const session = client?.getSession(state.acpSessionID);
     if (client === undefined || session === undefined) return { status: "notFound" };
 
@@ -479,12 +479,12 @@ export class Coordinator {
 
   async deleteSession(config: Config, input: DeleteSessionInput): Promise<MutationResult> {
     const agent = config.agents.find((item) => item.id === input.agentID);
-    const entry = this.hub.get(input.agentID);
+    const entry = this.agents.get(input.agentID);
     if (agent === undefined || entry === undefined) return { status: "notFound" };
 
     let client: AcpClient;
     try {
-      client = await this.hub.ensureClient(input.agentID);
+      client = await this.agents.ensureClient(input.agentID);
     } catch (error) {
       logWarn("acp", `could not start ${input.agentID} for session deletion: ${message(error)}`);
       return { status: "saveFailed" };

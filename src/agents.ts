@@ -178,22 +178,22 @@ export type Availability =
       readonly exited: boolean;
     };
 
-export interface AgentHubOptions {
+export interface AgentManagerOptions {
   /** Called when a process reports capabilities the provider catalog has to reflect. */
   readonly onProviderChange?: () => void;
 }
 
 /**
  * Owns every configured agent process. OpenCode evaluates one plugin module per
- * location, but the hub and its processes are shared through `ServerState`, so
+ * location, but the manager and its processes are shared through `ServerState`, so
  * reverse requests are routed by (agent, ACP session) to the owning location.
  */
-export class AgentHub {
+export class AgentManager {
   private readonly entries = new Map<string, AgentEntry>();
   private readonly turns = new Map<string, ActiveTurnRegistration>();
   private readonly capabilities = new Map<string, { image: boolean; audio: boolean }>();
 
-  constructor(private readonly options: AgentHubOptions = {}) {}
+  constructor(private readonly options: AgentManagerOptions = {}) {}
 
   get(agentID: string): AgentEntry | undefined {
     return this.entries.get(agentID);
