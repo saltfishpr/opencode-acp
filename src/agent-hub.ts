@@ -19,6 +19,7 @@ import {
   AcpTimeoutError,
   type ConfigOption,
   type HostContext,
+  type SessionOptionsSnapshot,
 } from "./acp/index.js";
 import type { AgentConfig, Config } from "./config.js";
 import type { TurnContext } from "./interaction/permission.js";
@@ -51,12 +52,23 @@ const CatalogCommandSchema = z
   })
   .readonly();
 
-/** The model and command catalog learned from an ACP session. */
+const CatalogModeSchema = z
+  .object({
+    value: z.string(),
+    name: z.string(),
+  })
+  .readonly();
+
+/** The model, mode and command catalog learned from an ACP session. */
 export const CatalogSchema = z
   .object({
     models: z.array(CatalogModelSchema).readonly(),
     /** Model the agent selected when the discovery session was created. */
     defaultModel: z.string().optional(),
+    /** Modes the agent offers for a new session. */
+    modes: z.array(CatalogModeSchema).readonly().default([]),
+    /** Mode the agent selected when the discovery session was created. */
+    defaultMode: z.string().optional(),
     /** Commands the agent advertised during discovery, used until a session reports its own. */
     commands: z.array(CatalogCommandSchema).readonly().default([]),
   })
@@ -70,6 +82,7 @@ const CatalogCacheSchema = z.object({
 export type CatalogThought = z.infer<typeof CatalogThoughtSchema>;
 export type CatalogModel = z.infer<typeof CatalogModelSchema>;
 export type CatalogCommand = z.infer<typeof CatalogCommandSchema>;
+export type CatalogMode = z.infer<typeof CatalogModeSchema>;
 export type Catalog = z.infer<typeof CatalogSchema>;
 
 /** The part of each advertised command kept for the catalog and the client. */
@@ -256,8 +269,9 @@ export class AgentHub {
   }
 
   /**
-   * Learns the model list, each model's thinking levels, and the commands the
-   * agent advertises. Zero-session when `session/options` can answer the catalog.
+   * Learns the model list, each model's thinking levels, the modes and the
+   * commands the agent advertises. Zero-session when `session/options` can
+   * answer the catalog.
    */
   async discoverCatalog(client: AcpClient, cwd: string): Promise<Catalog> {
     const capabilities = client.agentCapabilities;
@@ -266,8 +280,9 @@ export class AgentHub {
 
     if (supportsOptions && experimental !== null) {
       const initial = await experimental.getSessionOptions({ cwd });
+      const modeInfo = catalogModes(initial);
       const modelOption = selectConfigOption(initial.configOptions, "model");
-      if (modelOption === undefined) return { models: [], commands: [] };
+      if (modelOption === undefined) return { models: [], ...modeInfo, commands: [] };
 
       const models = catalogModels(modelOption);
       const thoughts = selectConfigOption(initial.configOptions, "thought_level");
@@ -282,11 +297,12 @@ export class AgentHub {
             },
           ],
           defaultModel: modelOption.currentValue,
+          ...modeInfo,
           commands: [],
         };
       }
       if (models.length <= 1 || thoughts === undefined) {
-        return { models, defaultModel: modelOption.currentValue, commands: [] };
+        return { models, defaultModel: modelOption.currentValue, ...modeInfo, commands: [] };
       }
     }
 
@@ -400,6 +416,7 @@ export class AgentHub {
         } else status = current.phase;
 
         const entry = this.entries.get(agent.id);
+        const catalog = entry?.catalog;
         return {
           id: agent.id,
           name: agent.name,
@@ -408,8 +425,11 @@ export class AgentHub {
           enabled: agent.enabled,
           status,
           envKeys: Object.keys(agent.env),
-          modelCount: entry?.catalog?.models.length ?? 0,
+          modelCount: catalog?.models.length ?? 0,
           failure: entry?.failure || (current.exited ? "exited" : ""),
+          modes: [...(catalog?.modes ?? [])],
+          // The agent's own startup mode stands in until the user picks one.
+          defaultMode: agent.defaultMode || catalog?.defaultMode || "",
         };
       }),
     };
@@ -498,8 +518,9 @@ export class AgentHub {
 
 async function probeCatalog(session: import("./acp/index.js").AcpSession): Promise<Catalog> {
   const initial = session.getSnapshot();
+  const modeInfo = catalogModes(initial);
   const modelOption = selectConfigOption(initial.configOptions, "model");
-  if (modelOption === undefined) return { models: [], commands: [] };
+  if (modelOption === undefined) return { models: [], ...modeInfo, commands: [] };
 
   const defaultModel = modelOption.currentValue;
   const models: CatalogModel[] = [];
@@ -520,7 +541,29 @@ async function probeCatalog(session: import("./acp/index.js").AcpSession): Promi
   return {
     models,
     defaultModel,
+    ...modeInfo,
     commands: catalogCommands(session.getSnapshot().availableCommands),
+  };
+}
+
+/**
+ * Reads the modes a fresh session starts with, from either the config option or
+ * the legacy mode state.
+ */
+export function catalogModes(snapshot: SessionOptionsSnapshot): { modes: CatalogMode[]; defaultMode?: string } {
+  if (snapshot.hasConfigOptions) {
+    const option = selectConfigOption(snapshot.configOptions, "mode");
+    if (option === undefined) return { modes: [] };
+    return {
+      modes: option.options.map(({ value, name }) => ({ value, name })),
+      ...(option.currentValue.length === 0 ? {} : { defaultMode: option.currentValue }),
+    };
+  }
+
+  if (snapshot.modes === null) return { modes: [] };
+  return {
+    modes: snapshot.modes.availableModes.map(({ id, name }) => ({ value: id, name })),
+    ...(snapshot.modes.currentModeId.length === 0 ? {} : { defaultMode: snapshot.modes.currentModeId }),
   };
 }
 

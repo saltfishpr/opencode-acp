@@ -14,6 +14,8 @@ const AgentConfigSchema = z
     args: z.array(z.string()).readonly(),
     env: z.record(z.string(), z.string()).readonly(),
     enabled: z.boolean(),
+    /** Mode a new ACP session starts in; empty keeps the agent's own default. */
+    defaultMode: z.string().default(""),
   })
   .readonly();
 

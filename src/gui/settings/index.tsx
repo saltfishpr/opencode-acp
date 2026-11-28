@@ -8,6 +8,7 @@ import {
   createResource,
   createSignal,
   onCleanup,
+  type JSX,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { LOG_LEVELS } from "../../log.js";
@@ -21,6 +22,14 @@ import { AgentRow } from "./agent-row.js";
 type Connection = { id: string; client: ServerRef["client"] };
 type LoadError = "unavailable" | "updatePlugin" | "loadFailed";
 type LoadResult = { connection: Connection; settings: SettingsView } | { connection: Connection; error: LoadError };
+
+function SettingsList(props: { children: JSX.Element }) {
+  return (
+    <div data-component="settings-list" data-variant="catalog">
+      {props.children}
+    </div>
+  );
+}
 
 export function Settings() {
   const ctx = usePlugin<typeof definition>();
@@ -199,10 +208,10 @@ export function Settings() {
             ]}
           />
         </div>
-        <div data-component="settings-list" data-variant="catalog">
-          <Show
-            when={settings()}
-            fallback={
+        <Show
+          when={settings()}
+          fallback={
+            <SettingsList>
               <div class="acp-agents-message" role="status">
                 <Show
                   when={statusMessage()}
@@ -216,45 +225,63 @@ export function Settings() {
                   {(text: () => string) => text()}
                 </Show>
               </div>
-            }
-          >
-            {(current: () => SettingsView) => (
-              <For each={agents} fallback={<div class="acp-agents-message">{ctx.t("empty")}</div>}>
+            </SettingsList>
+          }
+        >
+          {(current: () => SettingsView) => (
+            <div class="acp-agent-list">
+              <For
+                each={agents}
+                fallback={
+                  <SettingsList>
+                    <div class="acp-agents-message">{ctx.t("empty")}</div>
+                  </SettingsList>
+                }
+              >
                 {(agent) => (
-                  <AgentRow
-                    agent={agent}
-                    pending={pending() !== undefined}
-                    onEdit={() => {
-                      const server = selected();
-                      if (server !== undefined)
-                        openForm(server, current().revision, undefined, {
-                          ...agent,
-                          args: [...agent.args],
-                          envKeys: [...agent.envKeys],
-                        });
-                    }}
-                    onToggle={() => {
-                      const id = selectedID();
-                      if (id !== undefined)
-                        void act(id, (rpc) =>
-                          rpc.setEnabled({ revision: current().revision, id: agent.id, enabled: !agent.enabled }),
-                        );
-                    }}
-                    onRetry={() => {
-                      const id = selectedID();
-                      if (id !== undefined)
-                        void act(id, (rpc) => rpc.retryAgent({ revision: current().revision, id: agent.id }));
-                    }}
-                    onRemove={() => {
-                      const server = selected();
-                      if (server !== undefined) void removeAgent(server, agent, current().revision);
-                    }}
-                  />
+                  <SettingsList>
+                    <AgentRow
+                      agent={agent}
+                      pending={pending() !== undefined}
+                      onEdit={() => {
+                        const server = selected();
+                        if (server !== undefined)
+                          openForm(server, current().revision, undefined, {
+                            ...agent,
+                            args: [...agent.args],
+                            envKeys: [...agent.envKeys],
+                          });
+                      }}
+                      onToggle={() => {
+                        const id = selectedID();
+                        if (id !== undefined)
+                          void act(id, (rpc) =>
+                            rpc.setEnabled({ revision: current().revision, id: agent.id, enabled: !agent.enabled }),
+                          );
+                      }}
+                      onRetry={() => {
+                        const id = selectedID();
+                        if (id !== undefined)
+                          void act(id, (rpc) => rpc.retryAgent({ revision: current().revision, id: agent.id }));
+                      }}
+                      onRemove={() => {
+                        const server = selected();
+                        if (server !== undefined) void removeAgent(server, agent, current().revision);
+                      }}
+                      onSelectMode={(mode) => {
+                        const id = selectedID();
+                        if (id !== undefined)
+                          void act(id, (rpc) =>
+                            rpc.setDefaultMode({ revision: current().revision, id: agent.id, defaultMode: mode }),
+                          );
+                      }}
+                    />
+                  </SettingsList>
                 )}
               </For>
-            )}
-          </Show>
-        </div>
+            </div>
+          )}
+        </Show>
         <Show when={actionError()?.id === selectedID() ? actionError()?.text : undefined}>
           {(text: () => string) => (
             <span class="acp-error" role="alert">

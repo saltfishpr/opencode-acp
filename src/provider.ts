@@ -14,7 +14,7 @@ import type {
 } from "@ai-sdk/provider";
 import { Model, Plugin, Provider } from "@opencode/plugin";
 import type { AcpClient, AcpSession, ConfigOption } from "./acp/index.js";
-import { selectConfigOption, type AgentHub } from "./agent-hub.js";
+import { catalogModes, selectConfigOption, type AgentHub } from "./agent-hub.js";
 import type { TurnContext } from "./interaction/permission.js";
 import { logInfo, logWarn } from "./log.js";
 import { readAcpMetadata, writeAcpMetadata, type SessionTitles } from "./coordinator.js";
@@ -512,12 +512,33 @@ async function resolveSession(
 
 async function createSession(client: AcpClient, sessionID: string, cwd: string, deps: TurnDeps): Promise<AcpSession> {
   const session = await client.newSession({ cwd });
+  await applyDefaultMode(session, deps.hub.get(deps.agentID)?.agent.defaultMode);
   await writeAcpMetadata(deps.ctx, sessionID, {
     agent: deps.agentID,
     session: session.sessionId,
     cwd,
   });
   return session;
+}
+
+/** A configured mode that the session no longer offers is skipped so the turn still runs. */
+async function applyDefaultMode(session: AcpSession, mode: string | undefined): Promise<void> {
+  if (mode === undefined || mode.length === 0) return;
+
+  const snapshot = session.getSnapshot();
+  if (snapshot.mode === mode) return;
+
+  if (!catalogModes(snapshot).modes.some((item) => item.value === mode)) {
+    logWarn("acp", `default mode ${mode} is not offered by the new session; keeping the agent default`);
+    return;
+  }
+
+  try {
+    await session.setMode(mode);
+    logInfo("acp", `mode switched to ${mode}`);
+  } catch (error) {
+    logWarn("acp", `could not apply the default mode ${mode}: ${message(error)}`);
+  }
 }
 
 /**

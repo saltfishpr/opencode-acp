@@ -111,7 +111,13 @@ export default Plugin.define({
               env[key] = saved;
             }
           }
-          const next = { ...agent, name: agent.name.trim(), command, env };
+          const next = {
+            ...agent,
+            name: agent.name.trim(),
+            command,
+            env,
+            defaultMode: agent.defaultMode ?? previous?.defaultMode ?? "",
+          };
           return saveAgent(ctx, agent.id, previous, {
             ...next,
             enabled: previous?.enabled ?? true,
@@ -155,6 +161,16 @@ export default Plugin.define({
             setLogLevel(logLevel);
           }
           return { status: "ok" };
+        });
+      },
+      setDefaultMode({ revision, id, defaultMode }) {
+        return mutate(revision, async () => {
+          const agent = state.config.agents.find((item) => item.id === id);
+          if (agent === undefined) return { status: "notFound" };
+          const next = defaultMode.trim();
+          if (next.includes("\0")) return { status: "invalid" };
+          if (next === agent.defaultMode) return { status: "ok" };
+          return saveAgent(ctx, id, agent, { ...agent, defaultMode: next });
         });
       },
       listAgents() {

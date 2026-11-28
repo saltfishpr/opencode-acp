@@ -19,6 +19,12 @@ export type EmptyInput = z.infer<typeof EmptyInputSchema>;
 const AgentStatusSchema = z.enum(["disabled", "missing", "discovering", "ready", "failed"]);
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
+const AgentModeViewSchema = z.strictObject({
+  value: z.string(),
+  name: z.string(),
+});
+export type AgentModeView = z.infer<typeof AgentModeViewSchema>;
+
 const AgentViewSchema = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -29,6 +35,8 @@ const AgentViewSchema = z.strictObject({
   status: AgentStatusSchema,
   modelCount: z.number().int(),
   failure: z.string(),
+  modes: z.array(AgentModeViewSchema),
+  defaultMode: z.string(),
 });
 export type AgentView = z.infer<typeof AgentViewSchema>;
 
@@ -46,6 +54,8 @@ const AgentInputSchema = z.strictObject({
   args: z.array(z.string()),
   /** Null keeps the value already stored on the server. */
   env: z.record(z.string(), z.string().nullable()),
+  /** Omitted keeps the value already stored on the server. */
+  defaultMode: z.string().optional(),
 });
 export type AgentInput = z.infer<typeof AgentInputSchema>;
 
@@ -78,6 +88,13 @@ const SetLogLevelInputSchema = z.strictObject({
   logLevel: z.enum(LOG_LEVELS),
 });
 export type SetLogLevelInput = z.infer<typeof SetLogLevelInputSchema>;
+
+const SetDefaultModeInputSchema = z.strictObject({
+  revision: RevisionSchema,
+  id: z.string(),
+  defaultMode: z.string(),
+});
+export type SetDefaultModeInput = z.infer<typeof SetDefaultModeInputSchema>;
 
 const SessionAgentStatusSchema = z.enum(["ready", "stopped", "unsupported", "unavailable", "disabled"]);
 export type SessionAgentStatus = z.infer<typeof SessionAgentStatusSchema>;
@@ -306,6 +323,7 @@ export const AcpRpc = Rpc.define({
     setEnabled: { input: SetEnabledInputSchema, output: MutationResultSchema },
     removeAgent: { input: AgentTargetInputSchema, output: MutationResultSchema },
     retryAgent: { input: AgentTargetInputSchema, output: MutationResultSchema },
+    setDefaultMode: { input: SetDefaultModeInputSchema, output: MutationResultSchema },
     setLogLevel: { input: SetLogLevelInputSchema, output: MutationResultSchema },
     listAgents: { input: EmptyInputSchema, output: SessionAgentsViewSchema },
     listSessions: { input: ListSessionsInputSchema, output: AgentSessionsViewSchema },
