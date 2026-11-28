@@ -205,8 +205,6 @@ function SessionPillMenu(props: {
     acpMetadataOf(props.input.session) === undefined;
 
   const optionLabel = (option: SessionOptionView) => (option.id === "__mode" ? ctx.t("pill.mode") : option.name);
-  const optionDescription = (option: SessionOptionView) =>
-    option.description ?? (option.category === "mode" ? ctx.t("pill.modeDescription") : undefined);
 
   async function change(configID: string, value: string | boolean) {
     if (saving()) return;
@@ -297,7 +295,7 @@ function SessionPillMenu(props: {
                     <div class="acp-pill-field">
                       <div class="acp-pill-copy">
                         <span class="acp-pill-label">{optionLabel(option)}</span>
-                        <Show when={optionDescription(option)}>
+                        <Show when={option.description}>
                           {(text: () => string) => <span class="acp-pill-description">{text()}</span>}
                         </Show>
                       </div>
